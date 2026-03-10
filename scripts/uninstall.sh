@@ -2,34 +2,50 @@
 set -euo pipefail
 
 SERVICE_NAME="iblai-router"
+PLIST_LABEL="com.iblai.router"
+PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 ROUTER_DIR="$HOME/.openclaw/workspace/router"
+
+# Detect OS
+OS="$(uname -s)"
 
 echo "Removing iblai-router..."
 
 # 1. Stop and disable service
-if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-  sudo systemctl stop "$SERVICE_NAME"
-  echo "  ✓ Service stopped"
+if [ "$OS" = "Darwin" ]; then
+  # ── macOS: launchd ──────────────────────────────────────────────────────────
+  if [ -f "$PLIST_PATH" ]; then
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+    echo "  ✓ Service stopped"
+    rm "$PLIST_PATH"
+    echo "  ✓ Launchd plist removed"
+  fi
+
+else
+  # ── Linux: systemd ──────────────────────────────────────────────────────────
+  if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    sudo systemctl stop "$SERVICE_NAME"
+    echo "  ✓ Service stopped"
+  fi
+
+  if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+    sudo systemctl disable "$SERVICE_NAME"
+  fi
+
+  if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
+    sudo rm "/etc/systemd/system/$SERVICE_NAME.service"
+    sudo systemctl daemon-reload
+    echo "  ✓ Systemd unit removed"
+  fi
 fi
 
-if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-  sudo systemctl disable "$SERVICE_NAME"
-fi
-
-# 2. Remove service file
-if [ -f "/etc/systemd/system/$SERVICE_NAME.service" ]; then
-  sudo rm "/etc/systemd/system/$SERVICE_NAME.service"
-  sudo systemctl daemon-reload
-  echo "  ✓ Systemd unit removed"
-fi
-
-# 3. Remove router files
+# 2. Remove router files
 if [ -d "$ROUTER_DIR" ]; then
   rm -rf "$ROUTER_DIR"
   echo "  ✓ Router files removed from $ROUTER_DIR"
 fi
 
-# 4. Clean up OpenClaw config
+# 3. Clean up OpenClaw config
 OPENCLAW_JSON="$HOME/.openclaw/openclaw.json"
 if [ -f "$OPENCLAW_JSON" ] && command -v python3 &> /dev/null; then
   python3 - "$OPENCLAW_JSON" << 'PYEOF'
@@ -75,7 +91,7 @@ else:
 PYEOF
 fi
 
-# 5. Clean up cached models.json
+# 4. Clean up cached models.json
 MODELS_JSON="$HOME/.openclaw/agents/main/agent/models.json"
 if [ -f "$MODELS_JSON" ] && command -v python3 &> /dev/null; then
   python3 - "$MODELS_JSON" << 'PYEOF'
