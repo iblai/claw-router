@@ -4,7 +4,12 @@ set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ROUTER_DIR="$HOME/.openclaw/workspace/router"
 SERVICE_NAME="iblai-router"
+PLIST_LABEL="com.iblai.router"
+PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
 PORT=8402
+
+# Detect OS
+OS="$(uname -s)"
 
 echo "⚡ Installing iblai-router..."
 
@@ -28,16 +33,76 @@ if [ -f "$AUTH_FILE" ]; then
   API_KEY=$(grep -o '"key": "[^"]*"' "$AUTH_FILE" 2>/dev/null | head -1 | cut -d'"' -f4 || true)
 fi
 
-if [ -z "$API_KEY" ]; then
-  echo ""
-  echo "  ⚠ Could not auto-detect Anthropic API key."
-  echo "  Edit /etc/systemd/system/$SERVICE_NAME.service and set ANTHROPIC_API_KEY manually."
-  API_KEY="sk-ant-YOUR-KEY-HERE"
-fi
-
-# 3. Create systemd service
+# 3. Install and start service
 NODE_BIN=$(which node)
-sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
+
+if [ "$OS" = "Darwin" ]; then
+  # ── macOS: launchd ──────────────────────────────────────────────────────────
+  if [ -z "$API_KEY" ]; then
+    echo ""
+    echo "  ⚠ Could not auto-detect Anthropic API key."
+    echo "  Edit $PLIST_PATH and set the ANTHROPIC_API_KEY value manually."
+    API_KEY="sk-ant-YOUR-KEY-HERE"
+  fi
+
+  mkdir -p "$HOME/Library/LaunchAgents"
+
+  cat > "$PLIST_PATH" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$PLIST_LABEL</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>$NODE_BIN</string>
+        <string>$ROUTER_DIR/server.js</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ANTHROPIC_API_KEY</key>
+        <string>$API_KEY</string>
+        <key>ROUTER_CONFIG</key>
+        <string>$ROUTER_DIR/config.json</string>
+        <key>ROUTER_PORT</key>
+        <string>$PORT</string>
+        <key>ROUTER_LOG</key>
+        <string>1</string>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>$ROUTER_DIR/router.log</string>
+    <key>StandardErrorPath</key>
+    <string>$ROUTER_DIR/router-error.log</string>
+</dict>
+</plist>
+EOF
+  echo "  ✓ Created launchd plist at $PLIST_PATH"
+
+  # Unload first if already loaded (re-install case)
+  launchctl unload "$PLIST_PATH" 2>/dev/null || true
+  launchctl load "$PLIST_PATH"
+  echo "  ✓ Service started on port $PORT"
+
+else
+  # ── Linux: systemd ──────────────────────────────────────────────────────────
+  if [ -z "$API_KEY" ]; then
+    echo ""
+    echo "  ⚠ Could not auto-detect Anthropic API key."
+    echo "  Edit /etc/systemd/system/$SERVICE_NAME.service and set ANTHROPIC_API_KEY manually."
+    API_KEY="sk-ant-YOUR-KEY-HERE"
+  fi
+
+  sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
 [Unit]
 Description=iblai-router - Cost-optimizing Claude model routing
 After=network.target
@@ -55,22 +120,26 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
-echo "  ✓ Created systemd service"
+  echo "  ✓ Created systemd service"
 
-# 4. Start the service
-sudo systemctl daemon-reload
-sudo systemctl enable --now "$SERVICE_NAME"
-echo "  ✓ Service started on port $PORT"
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now "$SERVICE_NAME"
+  echo "  ✓ Service started on port $PORT"
+fi
 
-# 5. Wait for it to be ready
+# 4. Wait for it to be ready
 sleep 1
 if curl -sf "http://127.0.0.1:$PORT/health" > /dev/null 2>&1; then
   echo "  ✓ Health check passed"
 else
-  echo "  ⚠ Service started but health check failed — check: journalctl -u $SERVICE_NAME -f"
+  if [ "$OS" = "Darwin" ]; then
+    echo "  ⚠ Service started but health check failed — check: tail -f $ROUTER_DIR/router-error.log"
+  else
+    echo "  ⚠ Service started but health check failed — check: journalctl -u $SERVICE_NAME -f"
+  fi
 fi
 
-# 6. Register with OpenClaw config
+# 5. Register with OpenClaw config
 OPENCLAW_JSON="$HOME/.openclaw/openclaw.json"
 if [ -f "$OPENCLAW_JSON" ] && command -v python3 &> /dev/null; then
   python3 - "$OPENCLAW_JSON" "$PORT" << 'PYEOF'
