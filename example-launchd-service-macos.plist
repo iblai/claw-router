@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Et unikt navn på tjenesten, gjerne i omvendt domene-notasjon -->
+    <key>Label</key>
+    <string>com.dittnavn.rutertjeneste</string>
+
+    <!-- Hva som skal kjøres. Første argument er programmet, andre er skriptet -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/full/bane/til/prosjektet/server.js</string>
+    </array>
+
+    <!-- Start skriptet automatisk når filen lastes inn -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Hold tjenesten kjørende, og start den på nytt hvis den krasjer -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Miljøvariabler som kreves av programmet ditt -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ANTHROPIC_API_KEY</key>
+        <string>din_api_nøkkel_her</string>
+    </dict>
+
+    <!-- Filer for logging av utskrift og feilmeldinger -->
+    <key>StandardOutPath</key>
+    <string>/tmp/rutertjeneste.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/rutertjeneste-error.log</string>
+</dict>
+</plist>
