@@ -15,7 +15,12 @@ echo "⚡ Installing iblai-router..."
 
 # 1. Copy router files
 mkdir -p "$ROUTER_DIR"
-cp "$SKILL_DIR/server.js" "$ROUTER_DIR/server.js"
+if [ "$(realpath "$SKILL_DIR")" != "$(realpath "$ROUTER_DIR")" ]; then
+  cp "$SKILL_DIR/server.js" "$ROUTER_DIR/server.js"
+  echo "  ✓ Copied server.js to $ROUTER_DIR"
+else
+  echo "  ✓ server.js already in place (running from install dir)"
+fi
 
 # Only copy config if it doesn't exist (preserve user customizations)
 if [ ! -f "$ROUTER_DIR/config.json" ]; then
@@ -24,7 +29,6 @@ if [ ! -f "$ROUTER_DIR/config.json" ]; then
 else
   echo "  ✓ config.json already exists — preserved"
 fi
-echo "  ✓ Copied server.js to $ROUTER_DIR"
 
 # 2. Detect Anthropic API key
 API_KEY=""

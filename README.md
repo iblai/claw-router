@@ -466,7 +466,7 @@ Then update `config.json` with OpenRouter model IDs:
     "MEDIUM": "openai/gpt-4.1",
     "HEAVY":  "openai/o3"
   },
-  "apiBaseUrl": "https://openrouter.ai/api/v1"
+  "apiBaseUrl": "https://openrouter.ai/api"
 }
 ```
 
@@ -481,7 +481,7 @@ Then update `config.json` with OpenRouter model IDs:
     "MEDIUM": "google/gemini-2.5-flash",
     "HEAVY":  "google/gemini-2.5-pro"
   },
-  "apiBaseUrl": "https://openrouter.ai/api/v1"
+  "apiBaseUrl": "https://openrouter.ai/api"
 }
 ```
 
@@ -496,7 +496,7 @@ The most cost-effective setup often mixes providers. Use the cheapest model that
     "MEDIUM": "anthropic/claude-sonnet-4-20250514",
     "HEAVY":  "openai/o3"
   },
-  "apiBaseUrl": "https://openrouter.ai/api/v1"
+  "apiBaseUrl": "https://openrouter.ai/api"
 }
 ```
 
