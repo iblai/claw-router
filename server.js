@@ -227,7 +227,37 @@ function proxyToAnthropic(req, res, body, routedModel, tier) {
   const transport = parsed.protocol === "https:" ? https : http;
   const upstream = transport.request(options, (upstreamRes) => {
     res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
-    upstreamRes.pipe(res);
+
+    const contentType = (upstreamRes.headers["content-type"] || "").toLowerCase();
+    if (!contentType.includes("text/event-stream")) {
+      upstreamRes.pipe(res);
+      return;
+    }
+
+    // SSE: filter [DONE] frames — OpenClaw 2026.4.26 bundles pi-ai 0.70.2 which
+    // crashes on `event: data\ndata: [DONE]` proxy terminators (fixed in pi-ai 0.70.4).
+    let buf = "";
+    upstreamRes.on("data", (chunk) => {
+      buf += chunk.toString("utf8").replace(/\r\n/g, "\n");
+      let sep;
+      while ((sep = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const data = frame
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).trimStart())
+          .join("\n");
+        if (data !== "[DONE]") res.write(frame + "\n\n");
+      }
+    });
+    upstreamRes.on("end", () => {
+      if (buf.trim()) res.write(buf);
+      res.end();
+    });
+    upstreamRes.on("error", (err) => {
+      if (!res.destroyed) res.destroy(err);
+    });
   });
 
   upstream.on("error", (err) => {
