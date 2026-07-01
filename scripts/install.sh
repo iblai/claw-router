@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ROUTER_DIR="$HOME/.openclaw/workspace/router"
+ROUTER_DIR="$HOME/.openclaw/workspace/skills/router"
 SERVICE_NAME="iblai-router"
 PORT=8402
 
@@ -35,18 +35,28 @@ if [ -z "$API_KEY" ]; then
   API_KEY="sk-ant-YOUR-KEY-HERE"
 fi
 
-# 3. Create systemd service
+# 3. Pass through any additional provider keys set in the installer environment
+#    (for cross-provider routing — e.g. OpenRouter, z.ai, Moonshot).
+EXTRA_ENV=""
+for VAR in OPENROUTER_API_KEY OPENAI_API_KEY GOOGLE_API_KEY ZAI_API_KEY MOONSHOT_API_KEY; do
+  if [ -n "${!VAR:-}" ]; then
+    EXTRA_ENV="${EXTRA_ENV}Environment=${VAR}=${!VAR}"$'\n'
+    echo "  ✓ Passing through $VAR"
+  fi
+done
+
+# 4. Create systemd service
 NODE_BIN=$(which node)
 sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
 [Unit]
-Description=iblai-router - Cost-optimizing Claude model routing
+Description=iblai-router - Cost-optimizing model routing
 After=network.target
 
 [Service]
 Type=simple
 ExecStart=$NODE_BIN $ROUTER_DIR/server.js
 Environment=ANTHROPIC_API_KEY=$API_KEY
-Environment=ROUTER_CONFIG=$ROUTER_DIR/config.json
+${EXTRA_ENV}Environment=ROUTER_CONFIG=$ROUTER_DIR/config.json
 Environment=ROUTER_PORT=$PORT
 Environment=ROUTER_LOG=1
 Restart=always
@@ -57,12 +67,12 @@ WantedBy=multi-user.target
 EOF
 echo "  ✓ Created systemd service"
 
-# 4. Start the service
+# 5. Start the service
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$SERVICE_NAME"
 echo "  ✓ Service started on port $PORT"
 
-# 5. Wait for it to be ready
+# 6. Wait for it to be ready
 sleep 1
 if curl -sf "http://127.0.0.1:$PORT/health" > /dev/null 2>&1; then
   echo "  ✓ Health check passed"
@@ -70,7 +80,7 @@ else
   echo "  ⚠ Service started but health check failed — check: journalctl -u $SERVICE_NAME -f"
 fi
 
-# 6. Register with OpenClaw config
+# 7. Register with OpenClaw config
 OPENCLAW_JSON="$HOME/.openclaw/openclaw.json"
 if [ -f "$OPENCLAW_JSON" ] && command -v python3 &> /dev/null; then
   python3 - "$OPENCLAW_JSON" "$PORT" << 'PYEOF'

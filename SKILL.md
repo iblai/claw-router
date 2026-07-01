@@ -1,6 +1,6 @@
 ---
 name: iblai-router
-description: Cost-optimizing model router for OpenClaw. Automatically routes each request to the cheapest capable Claude model (Haiku/Sonnet/Opus) using weighted scoring. Use when setting up smart model routing, reducing API costs, or configuring multi-tier LLM routing. Supports Anthropic models directly and OpenAI/Google models via OpenRouter.
+description: Cost-optimizing model router for OpenClaw. Automatically routes each request to the cheapest capable model (LIGHT/MEDIUM/HEAVY tiers) using weighted scoring. Defaults to the latest Claude models (Haiku 4.5 / Sonnet 5 / Opus 4.8) and supports per-tier routing to other providers (OpenAI, Google, DeepSeek, z.ai, Moonshot) via Anthropic-compatible gateways. Use when setting up smart model routing, reducing API costs, or configuring multi-tier LLM routing.
 ---
 
 # iblai-router
@@ -53,29 +53,40 @@ Change the models per tier:
 ```json
 {
   "models": {
-    "LIGHT":  "claude-3-5-haiku-20241022",
-    "MEDIUM": "claude-sonnet-4-20250514",
-    "HEAVY":  "claude-opus-4-20250514"
+    "LIGHT":  "claude-haiku-4-5",
+    "MEDIUM": "claude-sonnet-5",
+    "HEAVY":  "claude-opus-4-8"
   }
 }
 ```
 
-### Non-Anthropic models (OpenAI, Google)
+### Models from other providers (per tier)
 
-Set `apiBaseUrl` to route through OpenRouter:
+Each tier can point at a different provider. A `providers` map defines the
+upstream (`baseUrl`, `apiKeyEnv`, `auth`), and any tier can be an object
+`{ "provider": "...", "model": "..." }` instead of a bare string. Providers
+must speak the **Anthropic Messages API** format (native, or via an
+Anthropic-compatible gateway such as OpenRouter, z.ai, or Moonshot):
 
 ```json
 {
-  "models": {
-    "LIGHT":  "openai/gpt-4.1-mini",
-    "MEDIUM": "openai/gpt-4.1",
-    "HEAVY":  "openai/o3"
+  "defaultProvider": "anthropic",
+  "providers": {
+    "anthropic":  { "baseUrl": "https://api.anthropic.com",      "apiKeyEnv": "ANTHROPIC_API_KEY",  "auth": "x-api-key" },
+    "openrouter": { "baseUrl": "https://openrouter.ai/api/v1",   "apiKeyEnv": "OPENROUTER_API_KEY", "auth": "bearer" },
+    "zai":        { "baseUrl": "https://api.z.ai/api/anthropic", "apiKeyEnv": "ZAI_API_KEY",        "auth": "x-api-key" }
   },
-  "apiBaseUrl": "https://openrouter.ai/api/v1"
+  "models": {
+    "LIGHT":  { "provider": "openrouter", "model": "google/gemini-2.5-flash" },
+    "MEDIUM": { "provider": "openrouter", "model": "openai/gpt-5.1" },
+    "HEAVY":  "claude-opus-4-8"
+  }
 }
 ```
 
-Update the API key in the systemd service when switching providers, then `systemctl daemon-reload && systemctl restart iblai-router`.
+Set the matching `apiKeyEnv` in the systemd service (the install script passes
+through `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ZAI_API_KEY`,
+`MOONSHOT_API_KEY` if present), then `systemctl daemon-reload && systemctl restart iblai-router`.
 
 ### Scoring
 

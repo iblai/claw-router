@@ -4,7 +4,7 @@
 
 # OpenClaw Router
 
-Route every OpenClaw request to the cheapest Claude model that can handle it.
+Route every OpenClaw request to the cheapest capable model — latest Claude models by default, or any provider per tier.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-brightgreen.svg)](https://nodejs.org)
@@ -17,7 +17,7 @@ Route every OpenClaw request to the cheapest Claude model that can handle it.
 
 ## Local Cost-Optimizing Model Router for OpenClaw
 
-A zero-dependency Node.js proxy that sits between OpenClaw and the Anthropic API, automatically routing each request to the cheapest Claude model capable of handling it. Inspired by [ClawRouter](https://github.com/BlockRunAI/ClawRouter)'s weighted scoring approach.
+A zero-dependency Node.js proxy that sits between OpenClaw and the Anthropic API, automatically routing each request to the cheapest capable model — the latest Claude models by default, with optional per-tier routing to other providers. Inspired by [ClawRouter](https://github.com/BlockRunAI/ClawRouter)'s weighted scoring approach.
 
 **Everything runs locally on your OpenClaw server.** No data is sent to ibl.ai or any third party — the router is a localhost proxy that forwards directly to your chosen LLM provider (Anthropic, OpenRouter, etc.) using your own API key.
 
@@ -73,9 +73,9 @@ OpenClaw  →  localhost:8402  →  api.anthropic.com
                ▼
         Maps weighted score to tier via sigmoid confidence
                │
-               ├── score < 0.0  → LIGHT  (Haiku)    $1/$5 per 1M tokens
-               ├── 0.0 – 0.35  → MEDIUM (Sonnet)   $3/$15 per 1M tokens
-               └── score > 0.35 → HEAVY  (Opus)     $15/$75 per 1M tokens
+               ├── score < 0.0  → LIGHT  (Haiku 4.5)  $1/$5 per 1M tokens
+               ├── 0.0 – 0.35  → MEDIUM (Sonnet 5)   $3/$15 per 1M tokens
+               └── score > 0.35 → HEAVY  (Opus 4.8)   $5/$25 per 1M tokens
                │
                ▼
         Overrides:
@@ -254,9 +254,9 @@ Override the config path with: `ROUTER_CONFIG=/path/to/my-config.json`
 ```json
 {
   "models": {
-    "LIGHT":  "claude-3-5-haiku-20241022",
-    "MEDIUM": "claude-sonnet-4-20250514",
-    "HEAVY":  "claude-opus-4-20250514"
+    "LIGHT":  "claude-haiku-4-5",
+    "MEDIUM": "claude-sonnet-5",
+    "HEAVY":  "claude-opus-4-8"
   }
 }
 ```
@@ -448,74 +448,79 @@ Compare your Anthropic usage dashboard before and after enabling the router. The
 
 The router's scoring engine is model-agnostic — it classifies request complexity, not model capabilities. You can swap in models from any provider that speaks the Anthropic Messages API format (or use an adapter).
 
-### OpenAI models via OpenRouter
+### Providers map
 
-[OpenRouter](https://openrouter.ai) exposes OpenAI, Google, and other models behind an Anthropic-compatible API. Point the router at OpenRouter instead of Anthropic:
+`config.json` has a `providers` map. Each entry defines an upstream that speaks
+the Anthropic Messages API format:
+
+```json
+{
+  "defaultProvider": "anthropic",
+  "providers": {
+    "anthropic":  { "baseUrl": "https://api.anthropic.com",      "apiKeyEnv": "ANTHROPIC_API_KEY",  "auth": "x-api-key" },
+    "openrouter": { "baseUrl": "https://openrouter.ai/api/v1",   "apiKeyEnv": "OPENROUTER_API_KEY", "auth": "bearer" },
+    "zai":        { "baseUrl": "https://api.z.ai/api/anthropic", "apiKeyEnv": "ZAI_API_KEY",        "auth": "x-api-key" },
+    "moonshot":   { "baseUrl": "https://api.moonshot.ai/anthropic", "apiKeyEnv": "MOONSHOT_API_KEY", "auth": "x-api-key" }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `baseUrl` | Upstream base — the router appends `/v1/messages` |
+| `apiKeyEnv` | Environment variable the key is read from (falls back to `ANTHROPIC_API_KEY`) |
+| `auth` | `x-api-key` (Anthropic-style) or `bearer` (`Authorization: Bearer`, e.g. OpenRouter) |
+| `referer` | Optional `HTTP-Referer` header (some gateways require it) |
+
+### Per-tier provider routing
+
+Any tier can be an object `{ "provider": "...", "model": "..." }` instead of a
+bare string (which uses `defaultProvider`). Mix providers freely — the scoring
+engine is model-agnostic, it classifies request complexity, not capabilities:
+
+```json
+{
+  "models": {
+    "LIGHT":  { "provider": "openrouter", "model": "google/gemini-2.5-flash" },
+    "MEDIUM": { "provider": "openrouter", "model": "openai/gpt-5.1" },
+    "HEAVY":  "claude-opus-4-8"
+  }
+}
+```
+
+[OpenRouter](https://openrouter.ai) exposes OpenAI, Google, DeepSeek, and dozens
+of others behind an Anthropic-compatible endpoint. z.ai (GLM) and Moonshot (Kimi)
+offer native Anthropic-format endpoints. Providers whose upstream is **not**
+Anthropic-format need a translating gateway (e.g. LiteLLM) in front.
+
+### Supplying provider keys
+
+Set the `apiKeyEnv` for each provider in the systemd service. The install script
+passes through `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
+`ZAI_API_KEY`, and `MOONSHOT_API_KEY` if they're present in its environment:
 
 ```bash
-# In iblai-router.service, change:
-Environment=ANTHROPIC_API_KEY=sk-or-YOUR-OPENROUTER-KEY
+OPENROUTER_API_KEY=sk-or-... bash scripts/install.sh
 ```
 
-Then update `config.json` with OpenRouter model IDs:
+Or add them to `/etc/systemd/system/iblai-router.service` manually:
 
-```json
-{
-  "models": {
-    "LIGHT":  "openai/gpt-4.1-mini",
-    "MEDIUM": "openai/gpt-4.1",
-    "HEAVY":  "openai/o3"
-  },
-  "apiBaseUrl": "https://openrouter.ai/api/v1"
-}
+```ini
+Environment=OPENROUTER_API_KEY=sk-or-YOUR-KEY
 ```
 
-> **Note:** The `apiBaseUrl` field in config.json overrides the default `https://api.anthropic.com` target. The server will proxy requests to whichever base URL you specify.
-
-### Google models via OpenRouter
-
-```json
-{
-  "models": {
-    "LIGHT":  "google/gemini-2.0-flash-lite",
-    "MEDIUM": "google/gemini-2.5-flash",
-    "HEAVY":  "google/gemini-2.5-pro"
-  },
-  "apiBaseUrl": "https://openrouter.ai/api/v1"
-}
-```
-
-### Mixed-provider tiers
-
-The most cost-effective setup often mixes providers. Use the cheapest model that handles each tier well:
-
-```json
-{
-  "models": {
-    "LIGHT":  "google/gemini-2.0-flash-lite",
-    "MEDIUM": "anthropic/claude-sonnet-4-20250514",
-    "HEAVY":  "openai/o3"
-  },
-  "apiBaseUrl": "https://openrouter.ai/api/v1"
-}
-```
-
-When mixing providers via OpenRouter, all models must use OpenRouter model IDs (prefixed with provider name).
-
-### Updating the systemd service
-
-After changing providers, restart the router to pick up the new API key:
+After editing the service file, restart to pick up the new key:
 
 ```bash
-# Edit the service file with the new key
 sudo systemctl daemon-reload
 sudo systemctl restart iblai-router
 
-# Verify routing targets
-curl -s http://127.0.0.1:8402/health | jq .
+# Verify routing targets (shows resolved provider + model per tier)
+curl -s http://127.0.0.1:8402/health | jq .tiers
 ```
 
-The config.json changes (model IDs, apiBaseUrl) are hot-reloaded automatically — no restart needed for those.
+The config.json changes (model IDs, providers) are hot-reloaded automatically — a
+restart is only needed when you add a new API key to the service environment.
 
 ---
 
@@ -598,13 +603,13 @@ In your OpenClaw session:
 
 ```
 # Revert a cron job to direct Sonnet
-/cron update <jobId> model=anthropic/claude-sonnet-4-20250514
+/cron update <jobId> model=anthropic/claude-sonnet-5
 
 # Revert subagent default
-/config set agents.defaults.subagents.model anthropic/claude-sonnet-4-20250514
+/config set agents.defaults.subagents.model anthropic/claude-sonnet-5
 
 # Revert main session
-/model anthropic/claude-opus-4-20250514
+/model anthropic/claude-opus-4-8
 ```
 
 ### Fully remove
@@ -651,7 +656,7 @@ This usually means one of two things:
     "defaults": {
       "models": {
         "iblai-router/auto": {},
-        "anthropic/claude-opus-4.6": { ... }
+        "anthropic/claude-opus-4-8": { ... }
       }
     }
   }
@@ -686,7 +691,7 @@ curl -s https://api.anthropic.com/v1/messages \
   -H "x-api-key: $ANTHROPIC_API_KEY" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
-  -d '{"model":"claude-3-5-haiku-20241022","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}' | jq .
+  -d '{"model":"claude-haiku-4-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}' | jq .
 ```
 
 ### Config changes not taking effect

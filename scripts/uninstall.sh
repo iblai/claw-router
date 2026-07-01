@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SERVICE_NAME="iblai-router"
-ROUTER_DIR="$HOME/.openclaw/workspace/router"
+ROUTER_DIR="$HOME/.openclaw/workspace/skills/router"
 
 echo "Removing iblai-router..."
 

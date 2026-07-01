@@ -32,6 +32,47 @@ function loadConfig() {
     );
   }
 
+  // ─── Providers ───
+  // Each provider = { baseUrl, apiKeyEnv, auth: "x-api-key"|"bearer", format, referer }.
+  // Backward compat: a top-level `apiBaseUrl` (legacy) synthesizes an override for
+  // the default provider so old single-provider configs keep working unchanged.
+  cfg.defaultProvider = cfg.defaultProvider || "anthropic";
+  cfg.providers = cfg.providers || {};
+  if (!cfg.providers.anthropic) {
+    cfg.providers.anthropic = {
+      baseUrl: "https://api.anthropic.com",
+      apiKeyEnv: "ANTHROPIC_API_KEY",
+      auth: "x-api-key",
+      format: "anthropic",
+    };
+  }
+  if (cfg.apiBaseUrl) {
+    const isOR = /openrouter/i.test(cfg.apiBaseUrl);
+    cfg.providers[cfg.defaultProvider] = {
+      ...cfg.providers[cfg.defaultProvider],
+      baseUrl: cfg.apiBaseUrl,
+      auth: isOR ? "bearer" : (cfg.providers[cfg.defaultProvider]?.auth || "x-api-key"),
+      referer: cfg.openRouterReferer || cfg.providers[cfg.defaultProvider]?.referer,
+    };
+  }
+
+  // ─── Tiers ───
+  // Normalize each tier value (string | {provider, model, stripThinking}) into a
+  // resolved spec. A bare string uses the default provider. LIGHT strips thinking
+  // by default (Haiku-class models reject extended-thinking params).
+  cfg.tiers = {};
+  for (const tier of ["LIGHT", "MEDIUM", "HEAVY"]) {
+    const v = cfg.models[tier];
+    const spec = typeof v === "string"
+      ? { provider: cfg.defaultProvider, model: v }
+      : { provider: v.provider || cfg.defaultProvider, model: v.model, stripThinking: v.stripThinking };
+    if (spec.stripThinking === undefined) spec.stripThinking = tier === "LIGHT";
+    if (!cfg.providers[spec.provider]) {
+      throw new Error(`Tier ${tier} references unknown provider "${spec.provider}"`);
+    }
+    cfg.tiers[tier] = spec;
+  }
+
   return cfg;
 }
 
@@ -112,20 +153,25 @@ function classify(text, estimatedTokens) {
     if (dim.signal) signals.push(`${name}:${dim.signal}`);
   }
 
-  const models = config.models;
   const overrides = s.overrides || {};
+
+  // Build a decision from a tier name, attaching the resolved model + provider.
+  const decide = (tier, extra) => {
+    const spec = config.tiers[tier];
+    return { model: spec.model, provider: spec.provider, stripThinking: spec.stripThinking, tier, score, signals, ...extra };
+  };
 
   // Override: 2+ reasoning keywords → HEAVY
   const reasoningMin = overrides.reasoningKeywordMin || 2;
   const reasoningHits = s.reasoningKeywords.filter(kw => lower.includes(kw.toLowerCase()));
   if (reasoningHits.length >= reasoningMin) {
-    return { model: models.HEAVY, tier: "HEAVY", score, confidence: 0.95, signals, reasoning: "reasoning-override" };
+    return decide("HEAVY", { confidence: 0.95, reasoning: "reasoning-override" });
   }
 
   // Override: large context → HEAVY
   const largeCtx = overrides.largeContextTokens || 50000;
   if (estimatedTokens > largeCtx) {
-    return { model: models.HEAVY, tier: "HEAVY", score, confidence: 0.95, signals, reasoning: "large-context" };
+    return decide("HEAVY", { confidence: 0.95, reasoning: "large-context" });
   }
 
   // Map score to tier
@@ -148,11 +194,10 @@ function classify(text, estimatedTokens) {
 
   // Ambiguous → default MEDIUM
   if (confidence < s.confidenceThreshold) {
-    return { model: models.MEDIUM, tier: "MEDIUM", score, confidence, signals, reasoning: "ambiguous→medium" };
+    return decide("MEDIUM", { confidence, reasoning: "ambiguous→medium" });
   }
 
-  const model = tier === "LIGHT" ? models.LIGHT : tier === "HEAVY" ? models.HEAVY : models.MEDIUM;
-  return { model, tier, score, confidence, signals, reasoning: "scored" };
+  return decide(tier, { confidence, reasoning: "scored" });
 }
 
 // ─── Extract scoring text from Anthropic messages format ───
@@ -175,30 +220,39 @@ function extractText(body) {
   return text;
 }
 
-// ─── Proxy to Anthropic ───
+// ─── Proxy upstream ───
 
-function proxyToAnthropic(req, res, body, routedModel, tier) {
-  body.model = routedModel;
+// Resolve the API key for a provider: its configured env var first, else the
+// legacy ANTHROPIC_API_KEY so single-provider Anthropic setups keep working.
+function providerKey(provider) {
+  return (provider.apiKeyEnv && process.env[provider.apiKeyEnv]) || ANTHROPIC_API_KEY;
+}
 
-  // Haiku doesn't support thinking — strip it when routing to LIGHT tier
-  if (tier === "LIGHT") {
-    delete body.thinking;
-    // Also strip thinking budget from anthropic-beta header
-    if (req.headers["anthropic-beta"]) {
-      const betas = req.headers["anthropic-beta"].split(",").map(s => s.trim())
-        .filter(b => !b.startsWith("thinking") && !b.startsWith("extended-thinking"));
-      if (betas.length > 0) {
-        req.headers["anthropic-beta"] = betas.join(",");
-      } else {
-        delete req.headers["anthropic-beta"];
-      }
+function stripThinking(body, headers) {
+  delete body.thinking;
+  // Also strip thinking budget from anthropic-beta header
+  if (headers["anthropic-beta"]) {
+    const betas = headers["anthropic-beta"].split(",").map(s => s.trim())
+      .filter(b => !b.startsWith("thinking") && !b.startsWith("extended-thinking"));
+    if (betas.length > 0) {
+      headers["anthropic-beta"] = betas.join(",");
+    } else {
+      delete headers["anthropic-beta"];
     }
   }
-  const payload = JSON.stringify(body);
+}
 
-  // Support custom API base URL from config (e.g. OpenRouter)
-  const baseUrl = config.apiBaseUrl || "https://api.anthropic.com";
-  const parsed = new URL(baseUrl);
+function proxyUpstream(req, res, body, decision) {
+  body.model = decision.model;
+
+  const provider = config.providers[decision.provider] || config.providers[config.defaultProvider];
+
+  // Models that don't support extended thinking (Haiku-class / LIGHT tier) —
+  // strip the thinking params OpenClaw sends so the upstream doesn't 400.
+  if (decision.stripThinking) stripThinking(body, req.headers);
+
+  const payload = JSON.stringify(body);
+  const parsed = new URL(provider.baseUrl);
 
   const options = {
     hostname: parsed.hostname,
@@ -211,13 +265,15 @@ function proxyToAnthropic(req, res, body, routedModel, tier) {
     },
   };
 
-  // Use appropriate auth header based on target
-  const isOpenRouter = parsed.hostname.includes("openrouter");
-  if (isOpenRouter) {
-    options.headers["Authorization"] = `Bearer ${ANTHROPIC_API_KEY}`;
-    options.headers["HTTP-Referer"] = config.openRouterReferer || "https://github.com/iblai/iblai-openclaw-router";
+  const key = providerKey(provider);
+  if (provider.auth === "bearer") {
+    options.headers["Authorization"] = `Bearer ${key}`;
+    if (provider.referer) options.headers["HTTP-Referer"] = provider.referer;
   } else {
-    options.headers["x-api-key"] = ANTHROPIC_API_KEY;
+    options.headers["x-api-key"] = key;
+  }
+  // Anthropic-format providers still expect the version + optional beta headers.
+  if ((provider.format || "anthropic") === "anthropic") {
     options.headers["anthropic-version"] = req.headers["anthropic-version"] || "2023-06-01";
     if (req.headers["anthropic-beta"]) {
       options.headers["anthropic-beta"] = req.headers["anthropic-beta"];
@@ -257,7 +313,7 @@ const stats = {
 const server = http.createServer((req, res) => {
   if (req.method === "GET" && (req.url === "/health" || req.url === "/")) {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", models: config.models, port: PORT }));
+    res.end(JSON.stringify({ status: "ok", models: config.models, tiers: config.tiers, port: PORT }));
     return;
   }
 
@@ -311,19 +367,22 @@ const server = http.createServer((req, res) => {
       );
     }
 
-    proxyToAnthropic(req, res, body, decision.model, decision.tier);
+    proxyUpstream(req, res, body, decision);
   });
 });
 
 // ─── Start ───
 
-if (!ANTHROPIC_API_KEY) {
-  console.error("[router] ANTHROPIC_API_KEY not set. Exiting.");
+const defaultProviderCfg = config.providers[config.defaultProvider];
+if (!providerKey(defaultProviderCfg)) {
+  const envName = defaultProviderCfg.apiKeyEnv || "ANTHROPIC_API_KEY";
+  console.error(`[router] No API key for default provider "${config.defaultProvider}" (set ${envName}). Exiting.`);
   process.exit(1);
 }
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`[router] iblai-router listening on http://127.0.0.1:${PORT}`);
   console.log(`[router] Config: ${CONFIG_PATH}`);
-  console.log(`[router] Models: LIGHT=${config.models.LIGHT} MEDIUM=${config.models.MEDIUM} HEAVY=${config.models.HEAVY}`);
+  const fmt = t => `${config.tiers[t].provider}/${config.tiers[t].model}`;
+  console.log(`[router] Tiers: LIGHT=${fmt("LIGHT")} MEDIUM=${fmt("MEDIUM")} HEAVY=${fmt("HEAVY")}`);
 });
