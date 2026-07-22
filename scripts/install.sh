@@ -36,42 +36,94 @@ if [ -z "$API_KEY" ]; then
   API_KEY=""
 fi
 
-# 3. Pass through any provider keys set in the installer environment.
-#    Local endpoints (Ollama, llama.cpp) typically don't need keys, but you
-#    can override the host with OLLAMA_HOST / LLAMACPP_HOST if non-default.
-EXTRA_ENV=""
+# 3. Capture any provider keys / host overrides set in the installer
+#    environment. We use python3 to safely escape values for systemd
+#    Environment= directives (a value with a newline or quote would
+#    otherwise inject extra directives or break the unit file).
+EXTRA_ENV_FILE="$(mktemp)"
+python3 - "$EXTRA_ENV_FILE" << 'PYEOF'
+import os, sys
+out_path = sys.argv[1]
+provider_envs = [
+    "OPENAI_API_KEY", "OPENROUTER_API_KEY", "ZAI_API_KEY", "MOONSHOT_API_KEY",
+    "OLLAMA_HOST", "LLAMACPP_HOST", "OLLAMA_API_KEY", "LLAMACPP_API_KEY",
+]
+with open(out_path, "w") as f:
+    for v in provider_envs:
+        val = os.environ.get(v)
+        if val is None or val == "":
+            continue
+        # Escape backslashes and double quotes for systemd syntax.
+        esc = val.replace("\\", "\\\\").replace("\"", "\\\"")
+        # Reject any value containing a newline / carriage return — never
+        # inject those into a systemd unit (would smuggle directives).
+        if "\n" in esc or "\r" in esc:
+            print(f"  ⚠ Refusing to write {v}: value contains newline/CR", file=sys.stderr)
+            continue
+        f.write(f'Environment={v}="{esc}"\n')
+PYEOF
+EXTRA_ENV="$(cat "$EXTRA_ENV_FILE" 2>/dev/null || true)"
+rm -f "$EXTRA_ENV_FILE"
+if [ -n "$EXTRA_ENV" ]; then
+  echo "$EXTRA_ENV" | while IFS= read -r line; do
+    var_name="${line%%=*}"
+    echo "  ✓ Passing through ${var_name#Environment=}"
+  done
+fi
+
+# 4. Create systemd service.
+# We build the unit file by composition:
+#   1. A static header herestrung with `printf` (substitute real paths now)
+#   2. An env-file written by a python heredoc that filters newline/CR
+#   3. The unit references the env-file via `EnvironmentFile=`
+# Net: the unit file body has zero unquoted shell interpolation in it.
+NODE_BIN=$(which node)
+ENV_FILE="/etc/openclaw-router.env"
+TMP_ENV="$(mktemp)"
+: > "$TMP_ENV"
 for VAR in OPENAI_API_KEY OPENROUTER_API_KEY ZAI_API_KEY MOONSHOT_API_KEY \
-            OLLAMA_HOST LLAMACPP_HOST OLLAMA_API_KEY LLAMACPP_API_KEY; do
+           OLLAMA_HOST LLAMACPP_HOST OLLAMA_API_KEY LLAMACPP_API_KEY; do
   if [ -n "${!VAR:-}" ]; then
-    EXTRA_ENV="${EXTRA_ENV}Environment=${VAR}=${!VAR}"$'\n'
-    case "$VAR" in
-      *_HOST) echo "  ✓ Passing through $VAR (upstream host override)" ;;
-      *_API_KEY) echo "  ✓ Passing through $VAR" ;;
-      *) echo "  ✓ Passing through $VAR" ;;
-    esac
+    SAFE_VAL=$(printf "%q" "${!VAR}")
+    echo "$VAR=$SAFE_VAL" >> "$TMP_ENV"
   fi
 done
+cat >> "$TMP_ENV" <<STATIC
+ROUTER_CONFIG=$ROUTER_DIR/config.json
+ROUTER_PORT=$PORT
+ROUTER_LOG=1
+STATIC
+sudo install -m 0600 "$TMP_ENV" "$ENV_FILE"
+rm -f "$TMP_ENV"
 
-# 4. Create systemd service
-NODE_BIN=$(which node)
-sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
-[Unit]
+# Build the unit file via printf — values that *need* expansion ($NODE_BIN,
+# $ENV_FILE, $ROUTER_DIR) are passed as printf arguments. There is no
+# unquoted heredoc that could swallow a malicious env value.
+UNIT_FILE="$(mktemp)"
+sudo python3 - "$UNIT_FILE" "$NODE_BIN" "$ENV_FILE" "$ROUTER_DIR" << 'PYEOF'
+import sys, os
+out, node_bin, env_file, router_dir = sys.argv[1:5]
+content = f"""[Unit]
 Description=openclaw-router - Cost-optimizing model routing (OpenAI Chat Completions)
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=$NODE_BIN $ROUTER_DIR/server.js
-${EXTRA_ENV}Environment=ROUTER_CONFIG=$ROUTER_DIR/config.json
-Environment=ROUTER_PORT=$PORT
-Environment=ROUTER_LOG=1
+ExecStart={node_bin} {router_dir}/server.js
+EnvironmentFile={env_file}
 Restart=always
 RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
-EOF
-echo "  ✓ Created systemd service"
+"""
+with open(out, "w") as f:
+    f.write(content)
+print(f"  ✓ Env file written with {os.path.getsize(env_file) if os.path.exists(env_file) else 0} bytes", file=sys.stderr)
+PYEOF
+sudo install -m 0644 "$UNIT_FILE" /etc/systemd/system/$SERVICE_NAME.service
+rm -f "$UNIT_FILE"
+echo "  ✓ Created systemd service (env file: $ENV_FILE)"
 
 # 5. Start the service
 sudo systemctl daemon-reload

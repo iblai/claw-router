@@ -1,4 +1,5 @@
 {
+  "_comment_upstreamAllowlist": "TODO: SSRF policy placeholder. openclaw-router forwards requests to provider.baseUrl (hot-reloadable). Today the URL is trusted as-is (operators only — default config has only public endpoints + 127.0.0.1). Add an `upstreamAllowlist` array here with allowed hostname patterns (e.g. 'api.openai.com', '127.0.0.1', 'localhost', or CIDR ranges), then enforce in server.js loadConfig(). Operators who want to point at private IPs / metadata endpoints / arbitrary hosts would explicitly opt in.",
   "defaultProvider": "ollama",
   "providers": {
     "ollama": {

@@ -219,6 +219,36 @@ function extractText(body) {
 
 // ─── Proxy upstream ───
 
+// Strip non-printable / ANSI / control chars before logging user content —
+// defense against terminal-escape log injection.
+function stripUnsafe(s) {
+  // eslint-disable-next-line no-control-regex
+  return String(s).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
+// Resolve an explicit (non-"auto") model id to a provider.
+// Convention: client may pass "provider/model" (e.g. "openai/gpt-5.1"), or
+// just "model" — bare ids are only valid if they match a tier entry under
+// the default provider. Anything else is rejected — we no longer silently
+// route to a provider the user didn't pick.
+function resolveExplicitModel(modelId) {
+  if (typeof modelId !== "string" || !modelId) return null;
+  if (modelId.includes("/")) {
+    const [provider, ...rest] = modelId.split("/");
+    if (config.providers[provider] && rest.length) {
+      return { provider, model: rest.join("/"), stripThinking: false };
+    }
+    return null;
+  }
+  for (const t of ["LIGHT", "MEDIUM", "HEAVY"]) {
+    const spec = config.tiers[t];
+    if (spec && spec.provider === config.defaultProvider && spec.model === modelId) {
+      return { provider: spec.provider, model: spec.model, stripThinking: spec.stripThinking };
+    }
+  }
+  return null;
+}
+
 // Resolve the API key for a provider: prefer env var if apiKeyEnv is set;
 // else fall back to literal apiKey in config (useful for local Ollama/llama.cpp
 // where there's no key). When both are missing, the request goes out without
@@ -241,7 +271,7 @@ function stripThinking(body) {
   }
 }
 
-function proxyUpstream(req, res, body, decision) {
+function proxyUpstream(req, res, body, decision, onComplete) {
   body.model = decision.model;
 
   const provider = config.providers[decision.provider] || config.providers[config.defaultProvider];
@@ -262,8 +292,9 @@ function proxyUpstream(req, res, body, decision) {
     headers: {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(payload),
-      // Pass through accept so streamed clients get the right content-type
-      "Accept": req.headers["accept"] || "application/json",
+      // Normalize Accept — we only ever emit JSON or SSE, never forward client
+      // headers that downstream proxies could treat as smuggling hints.
+      "Accept": "application/json",
     },
   };
 
@@ -274,7 +305,7 @@ function proxyUpstream(req, res, body, decision) {
 
   const transport = parsed.protocol === "https:" ? https : http;
   const upstreamReq = transport.request(options, (upstreamRes) => {
-    // Relay status + headers (filtered to safe ones)
+    // Relay status + safe subset of headers
     const safeHeaders = {};
     const passthrough = ["content-type", "cache-control", "x-request-id"];
     for (const h of passthrough) {
@@ -282,6 +313,33 @@ function proxyUpstream(req, res, body, decision) {
     }
     res.writeHead(upstreamRes.statusCode, safeHeaders);
     upstreamRes.pipe(res);
+    // Mid-flight stream errors: emit an SSE error frame so streaming clients
+    // don't get a silently truncated response. If client isn't streaming,
+    // destroy the response so the fd is freed.
+    upstreamRes.on("error", (err) => {
+      console.error("[router] upstream stream error:", err.message);
+      try { res.write(`data: {"error":"upstream_stream_error"}\n\n`); } catch (_) {}
+      try { res.end(); } catch (_) {}
+    });
+    // Fire the completion callback when the DOWNSTREAM response is fully
+    // flushed to the client — `res.on('finish')` fires after the last byte
+    // has been written AND the connection signals completion. This works
+    // for both non-streaming JSON (clean end) and streaming SSE (server-
+    // driven close or client disconnect with terminal close). Using
+    // `upstreamRes.on('end')` would never fire for long-lived SSE streams.
+    res.on("finish", () => {
+      if (typeof onComplete === "function") onComplete();
+    });
+    res.on("error", () => {
+      // Downstream client disconnected before we finished writing —
+      // don't count this toward /stats.
+    });
+  });
+
+  // Cap upstream request lifetime so hung upstreams don't tie up sockets.
+  upstreamReq.setTimeout(120_000, () => {
+    console.error("[router] upstream timeout");
+    upstreamReq.destroy(new Error("upstream timeout"));
   });
 
   upstreamReq.on("error", (err) => {
@@ -289,6 +347,8 @@ function proxyUpstream(req, res, body, decision) {
     if (!res.headersSent) {
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: { type: "proxy_error", message: err.message } }));
+    } else {
+      try { res.end(); } catch (_) {}
     }
   });
 
@@ -308,7 +368,20 @@ const stats = {
 
 // ─── HTTP Server ───
 
+// Cap inbound request bodies so an attacker can't OOM the proxy with a single
+// multi-GB POST. 10 MB is plenty for chat-sized payloads; OpenClaw never sends
+// more than a few hundred KB. Override via ROUTER_MAX_BODY env (bytes).
+const MAX_BODY_BYTES = parseInt(process.env.ROUTER_MAX_BODY || `${10 * 1024 * 1024}`, 10);
+
 const server = http.createServer((req, res) => {
+  // Cap each connection's lifetime so a hostile slow client can't pin a socket.
+  // 5 min is plenty for a streamed LLM response; longer than that, recycle.
+  req.setTimeout(300_000, () => {
+    try { req.destroy(); } catch (_) {}
+  });
+  res.setTimeout(300_000, () => {
+    try { res.end(); } catch (_) {}
+  });
   if (req.method === "GET" && (req.url === "/health" || req.url === "/")) {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ status: "ok", models: config.models, tiers: config.tiers, port: PORT }));
@@ -324,22 +397,52 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // Accept the OpenAI Chat Completions route from OpenClaw; keep /v1/messages
-  // as a legacy alias for any already-deployed clients.
+  // Only OpenAI Chat Completions. /v1/messages (legacy Anthropic shape) is
+  // explicitly NOT supported — silent acceptance was worse than a clear 410.
   const isChatCompletions = req.method === "POST" && (
     req.url === "/v1/chat/completions" || req.url.startsWith("/v1/chat/completions?")
   );
   const isLegacyAnthropic = req.method === "POST" && (
     req.url.startsWith("/v1/messages") || req.url.startsWith("/v1/messages?")
   );
-  if (!isChatCompletions && !isLegacyAnthropic) {
+  if (isLegacyAnthropic) {
+    res.writeHead(410, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      error: "removed",
+      message: "Anthropic /v1/messages is no longer supported. Use /v1/chat/completions (OpenAI Chat Completions format)."
+    }));
+    return;
+  }
+  if (!isChatCompletions) {
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Not found. Use POST /v1/chat/completions" }));
     return;
   }
 
+  // Pre-check Content-Length before reading any bytes.
+  const declaredLength = parseInt(req.headers["content-length"] || "0", 10);
+  if (declaredLength > MAX_BODY_BYTES) {
+    res.writeHead(413, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "payload too large", limit: MAX_BODY_BYTES }));
+    return;
+  }
+
+  let totalBytes = 0;
   let chunks = [];
-  req.on("data", (chunk) => chunks.push(chunk));
+  req.on("data", (chunk) => {
+    totalBytes += chunk.length;
+    if (totalBytes > MAX_BODY_BYTES) {
+      // Tear down — the request is over the limit. We may already have headers
+      // in flight on res, but writeHead hasn't been called yet at this point.
+      if (!res.headersSent) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "payload too large", limit: MAX_BODY_BYTES }));
+      }
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
   req.on("end", () => {
     let body;
     try {
@@ -357,38 +460,64 @@ const server = http.createServer((req, res) => {
       const estimatedTokens = Math.ceil(text.length / 4);
       const decision = classify(text, estimatedTokens);
 
-      stats.total++;
-      stats.byTier[decision.tier] = (stats.byTier[decision.tier] || 0) + 1;
-      const cost = config.costs[decision.model] || { input: 0 };
-      stats.estimatedCost += (estimatedTokens / 1_000_000) * cost.input;
-      const heavyCost = (estimatedTokens / 1_000_000) * (config.costs[config.models.HEAVY]?.input || 5);
-      stats.baselineCost += heavyCost;
+      // Cost lookup uses provider-prefixed key to match config.costs layout.
+      // Fallback for unknown models: treat as 0 — by-design free rather than
+      // silently zeroing a real number.
+      const costKey = `${decision.provider}/${decision.model}`;
+      const cost = config.costs[costKey] || { input: 0, output: 0 };
+      // Baseline uses the resolved HEAVY tier entry — already normalized in config.tiers.
+      const heavySpec = config.tiers.HEAVY;
+      const heavyCostKey = `${heavySpec.provider}/${heavySpec.model}`;
+      const heavyInput = (config.costs[heavyCostKey] || cost).input;
 
       if (LOG_ROUTING) {
-        const savings = heavyCost > 0
-          ? ((heavyCost - (estimatedTokens / 1_000_000) * cost.input) / heavyCost * 100).toFixed(0)
-          : 0;
+        const promptCost = (estimatedTokens / 1_000_000) * cost.input;
+        const baseCost = (estimatedTokens / 1_000_000) * heavyInput;
+        const savings = baseCost > 0 ? ((baseCost - promptCost) / baseCost * 100).toFixed(0) : 0;
+        const safeSnippet = stripUnsafe(text).slice(0, 80).replace(/\n/g, " ");
         console.log(
-          `[router] ${decision.tier.padEnd(6)} → ${decision.model} ` +
+          `[router] ${decision.tier.padEnd(6)} → ${costKey} ` +
           `| score=${decision.score.toFixed(3)} conf=${decision.confidence.toFixed(2)} ` +
-          `| ${decision.reasoning} | -${savings}% | ${text.slice(0, 80).replace(/\n/g, " ")}...`
+          `| ${decision.reasoning} | -${savings}% | ${safeSnippet}...`
         );
       }
 
-      proxyUpstream(req, res, body, decision);
+      proxyUpstream(req, res, body, decision, () => {
+        // Post-success: count this routed request. Done in the completion
+        // callback so 4xx/5xx upstream responses don't inflate savings stats.
+        stats.total++;
+        stats.byTier[decision.tier] = (stats.byTier[decision.tier] || 0) + 1;
+        const promptCost = (estimatedTokens / 1_000_000) * cost.input;
+        const baseCost = (estimatedTokens / 1_000_000) * heavyInput;
+        stats.estimatedCost += promptCost;
+        stats.baselineCost += baseCost;
+      });
     } else {
-      // Specific model requested → just route to the default provider verbatim.
+      // Explicit model id — resolve to a registered provider or reject.
+      const resolved = resolveExplicitModel(body.model);
+      if (!resolved) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+          error: "unknown model",
+          model: stripUnsafe(body.model),
+          hint: "Use a provider-prefixed model id (e.g. 'openai/gpt-5.1') or 'auto' to score-and-route."
+        }));
+        return;
+      }
       const decision = {
-        model: body.model,
-        provider: config.defaultProvider,
-        stripThinking: false,
+        model: resolved.model,
+        provider: resolved.provider,
+        stripThinking: resolved.stripThinking,
         tier: "BYPASS",
         score: 0,
         signals: [],
         confidence: 1,
         reasoning: "explicit-model",
       };
-      proxyUpstream(req, res, body, decision);
+      proxyUpstream(req, res, body, decision, () => {
+        stats.total++;
+        stats.byTier["BYPASS"] = (stats.byTier["BYPASS"] || 0) + 1;
+      });
     }
   });
 });
