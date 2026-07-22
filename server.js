@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * iblai-router — Local cost-optimizing proxy for Anthropic Claude models.
+ * openclaw-router — Local cost-optimizing proxy for Anthropic Claude models.
  *
  * Sits between OpenClaw and the Anthropic API, automatically routing each
  * request to the cheapest capable Claude model using weighted scoring.
@@ -381,7 +381,7 @@ if (!providerKey(defaultProviderCfg)) {
 }
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[router] iblai-router listening on http://127.0.0.1:${PORT}`);
+  console.log(`[router] openclaw-router listening on http://127.0.0.1:${PORT}`);
   console.log(`[router] Config: ${CONFIG_PATH}`);
   const fmt = t => `${config.tiers[t].provider}/${config.tiers[t].model}`;
   console.log(`[router] Tiers: LIGHT=${fmt("LIGHT")} MEDIUM=${fmt("MEDIUM")} HEAVY=${fmt("HEAVY")}`);

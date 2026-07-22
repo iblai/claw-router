@@ -3,10 +3,10 @@ set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ROUTER_DIR="$HOME/.openclaw/workspace/skills/router"
-SERVICE_NAME="iblai-router"
+SERVICE_NAME="openclaw-router"
 PORT=8402
 
-echo "⚡ Installing iblai-router..."
+echo "⚡ Installing openclaw-router..."
 
 # 1. Copy router files
 mkdir -p "$ROUTER_DIR"
@@ -49,7 +49,7 @@ done
 NODE_BIN=$(which node)
 sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
 [Unit]
-Description=iblai-router - Cost-optimizing model routing
+Description=openclaw-router - Cost-optimizing model routing
 After=network.target
 
 [Service]
@@ -92,14 +92,14 @@ with open(config_path) as f:
 
 # Add model provider
 providers = cfg.setdefault("models", {}).setdefault("providers", {})
-if "iblai-router" not in providers:
-    providers["iblai-router"] = {
+if "openclaw-router" not in providers:
+    providers["openclaw-router"] = {
         "baseUrl": f"http://127.0.0.1:{port}",
         "apiKey": "passthrough",
         "api": "anthropic-messages",
         "models": [{
             "id": "auto",
-            "name": "iblai-router (auto)",
+            "name": "openclaw-router (auto)",
             "reasoning": True,
             "input": ["text", "image"],
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
@@ -113,9 +113,9 @@ else:
 
 # Add to model allowlist (agents.defaults.models) if it exists
 models_allowlist = cfg.get("agents", {}).get("defaults", {}).get("models")
-if models_allowlist is not None and "iblai-router/auto" not in models_allowlist:
-    models_allowlist["iblai-router/auto"] = {}
-    print("  ✓ Added iblai-router/auto to model allowlist")
+if models_allowlist is not None and "openclaw-router/auto" not in models_allowlist:
+    models_allowlist["openclaw-router/auto"] = {}
+    print("  ✓ Added openclaw-router/auto to model allowlist")
 
 with open(config_path, "w") as f:
     json.dump(cfg, f, indent=2)
@@ -130,12 +130,12 @@ else
   echo ""
   echo "  Now register the model in your OpenClaw session:"
   echo ""
-  echo '  /config set models.providers.iblai-router.baseUrl http://127.0.0.1:'"$PORT"
-  echo '  /config set models.providers.iblai-router.api anthropic-messages'
-  echo '  /config set models.providers.iblai-router.apiKey passthrough'
-  echo '  /config set models.providers.iblai-router.models [{"id":"auto","name":"iblai-router (auto)","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]'
+  echo '  /config set models.providers.openclaw-router.baseUrl http://127.0.0.1:'"$PORT"
+  echo '  /config set models.providers.openclaw-router.api anthropic-messages'
+  echo '  /config set models.providers.openclaw-router.apiKey passthrough'
+  echo '  /config set models.providers.openclaw-router.models [{"id":"auto","name":"openclaw-router (auto)","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]'
 fi
 echo ""
-echo "  Then use: /model iblai-router/auto"
+echo "  Then use: /model openclaw-router/auto"
 echo ""
 echo "⚡ Done! Check stats: curl http://127.0.0.1:$PORT/stats"

@@ -1,6 +1,6 @@
 <div align="center">
 
-<a href="https://ibl.ai"><img src="https://ibl.ai/images/iblai-logo.png" alt="ibl.ai" width="300"></a>
+<a href="https://openclaw-router"><img src="" alt="openclaw-router" width="300"></a>
 
 # OpenClaw Router
 
@@ -19,22 +19,22 @@ Route every OpenClaw request to the cheapest capable model — latest Claude mod
 
 A zero-dependency Node.js proxy that sits between OpenClaw and the Anthropic API, automatically routing each request to the cheapest capable model — the latest Claude models by default, with optional per-tier routing to other providers. Inspired by [ClawRouter](https://github.com/BlockRunAI/ClawRouter)'s weighted scoring approach.
 
-**Everything runs locally on your OpenClaw server.** No data is sent to ibl.ai or any third party — the router is a localhost proxy that forwards directly to your chosen LLM provider (Anthropic, OpenRouter, etc.) using your own API key.
+**Everything runs locally on your OpenClaw server.** No data is sent to openclaw-router or any third party — the router is a localhost proxy that forwards directly to your chosen LLM provider (Anthropic, OpenRouter, etc.) using your own API key.
 
 **Install from your terminal:**
 
 ```bash
-git clone https://github.com/iblai/iblai-openclaw-router.git router
+git clone https://github.com/xdemocle/openclaw-router.git router
 cd router && bash scripts/install.sh
 ```
 
 **Or just ask your OpenClaw agent:**
 
-> Install iblai-router from https://github.com/iblai/iblai-openclaw-router
+> Install openclaw-router from https://github.com/xdemocle/openclaw-router
 
 Your agent will clone the repo, run the install script, and register the model provider — all in one go.
 
-That's it — `iblai-router/auto` is now available as a model. Typical savings: **~80%** vs always using the most expensive model. Uninstall anytime by telling your agent "uninstall iblai-router" or running `bash scripts/uninstall.sh`.
+That's it — `openclaw-router/auto` is now available as a model. Typical savings: **~80%** vs always using the most expensive model. Uninstall anytime by telling your agent "uninstall openclaw-router" or running `bash scripts/uninstall.sh`.
 
 ### Sample savings after 30 days
 
@@ -49,7 +49,7 @@ That's it — `iblai-router/auto` is now available as a model. Typical savings: 
 
 **Check your savings anytime** — just ask your agent:
 
-> What are my iblai-router cost savings?
+> What are my openclaw-router cost savings?
 
 Or from the command line:
 
@@ -97,28 +97,28 @@ The proxy speaks native **Anthropic Messages API** format — it receives the ex
 
 In your OpenClaw chat or TUI, just say:
 
-> Install iblai-router from https://github.com/iblai/iblai-openclaw-router
+> Install openclaw-router from https://github.com/xdemocle/openclaw-router
 
-Your agent will clone the repo, run the install script, and register `iblai-router/auto` as a model provider automatically.
+Your agent will clone the repo, run the install script, and register `openclaw-router/auto` as a model provider automatically.
 
 ### Option B: Install script
 
 ```bash
 cd ~/.openclaw/workspace
-git clone https://github.com/iblai/iblai-openclaw-router.git router
+git clone https://github.com/xdemocle/openclaw-router.git router
 bash router/scripts/install.sh
 ```
 
 Then register the model in your OpenClaw session:
 
 ```
-/config set models.providers.iblai-router.baseUrl http://127.0.0.1:8402
-/config set models.providers.iblai-router.api anthropic-messages
-/config set models.providers.iblai-router.apiKey passthrough
-/config set models.providers.iblai-router.models [{"id":"auto","name":"iblai-router (auto)","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]
+/config set models.providers.openclaw-router.baseUrl http://127.0.0.1:8402
+/config set models.providers.openclaw-router.api anthropic-messages
+/config set models.providers.openclaw-router.apiKey passthrough
+/config set models.providers.openclaw-router.models [{"id":"auto","name":"openclaw-router (auto)","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]
 ```
 
-Done. Use `iblai-router/auto` as your model anywhere.
+Done. Use `openclaw-router/auto` as your model anywhere.
 
 To uninstall: `bash router/scripts/uninstall.sh`
 
@@ -129,12 +129,12 @@ Step-by-step if you prefer full control:
 ```bash
 # 1. Clone into your workspace
 cd ~/.openclaw/workspace
-git clone https://github.com/iblai/iblai-openclaw-router.git router
+git clone https://github.com/xdemocle/openclaw-router.git router
 
 # 2. Create the systemd service
-sudo tee /etc/systemd/system/iblai-router.service > /dev/null << EOF
+sudo tee /etc/systemd/system/openclaw-router.service > /dev/null << EOF
 [Unit]
-Description=iblai-router - Claude model routing
+Description=openclaw-router - Claude model routing
 After=network.target
 
 [Service]
@@ -153,7 +153,7 @@ EOF
 
 # 3. Start the router
 sudo systemctl daemon-reload
-sudo systemctl enable --now iblai-router
+sudo systemctl enable --now openclaw-router
 
 # 4. Verify it's running
 curl -s http://127.0.0.1:8402/health | jq .
@@ -166,10 +166,10 @@ curl -s http://127.0.0.1:8402/health | jq .
 In your OpenClaw session, run:
 
 ```
-/config set models.providers.iblai-router.baseUrl http://127.0.0.1:8402
-/config set models.providers.iblai-router.api anthropic-messages
-/config set models.providers.iblai-router.apiKey passthrough
-/config set models.providers.iblai-router.models [{"id":"auto","name":"iblai-router (auto)","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]
+/config set models.providers.openclaw-router.baseUrl http://127.0.0.1:8402
+/config set models.providers.openclaw-router.api anthropic-messages
+/config set models.providers.openclaw-router.apiKey passthrough
+/config set models.providers.openclaw-router.models [{"id":"auto","name":"openclaw-router (auto)","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]
 ```
 
 Or patch your `openclaw.json` directly:
@@ -178,13 +178,13 @@ Or patch your `openclaw.json` directly:
 {
   "models": {
     "providers": {
-      "iblai-router": {
+      "openclaw-router": {
         "baseUrl": "http://127.0.0.1:8402",
         "api": "anthropic-messages",
         "apiKey": "passthrough",
         "models": [{
           "id": "auto",
-          "name": "iblai-router (auto)",
+          "name": "openclaw-router (auto)",
           "reasoning": true,
           "input": ["text", "image"],
           "contextWindow": 200000,
@@ -196,7 +196,7 @@ Or patch your `openclaw.json` directly:
 }
 ```
 
-**Important: restart OpenClaw** after registering the provider. OpenClaw caches available models at startup — without a restart, cron jobs and subagents will fail with `model not allowed: iblai-router/auto`.
+**Important: restart OpenClaw** after registering the provider. OpenClaw caches available models at startup — without a restart, cron jobs and subagents will fail with `model not allowed: openclaw-router/auto`.
 
 ```bash
 # Option 1: From your OpenClaw session (if commands.restart is enabled)
@@ -212,7 +212,7 @@ sudo systemctl restart openclaw
 
 ### Verify the model is available
 
-After restart, confirm `iblai-router/auto` is recognized:
+After restart, confirm `openclaw-router/auto` is recognized:
 
 ```bash
 # 1. Check the router is healthy
@@ -226,7 +226,7 @@ curl -s http://127.0.0.1:8402/v1/messages \
   -d '{"model":"auto","max_tokens":50,"messages":[{"role":"user","content":"Say hi"}]}' | jq .model
 
 # 3. In your OpenClaw session, verify the model resolves
-/model iblai-router/auto
+/model openclaw-router/auto
 ```
 
 If cron jobs were in error backoff before the restart, they'll resume on their next scheduled run. To force an immediate run:
@@ -235,7 +235,7 @@ If cron jobs were in error backoff before the restart, they'll resume on their n
 /cron run <jobId>
 ```
 
-Now use `iblai-router/auto` anywhere you'd use a model ID. Every request routes to Haiku/Sonnet/Opus based on complexity. Check savings anytime:
+Now use `openclaw-router/auto` anywhere you'd use a model ID. Every request routes to Haiku/Sonnet/Opus based on complexity. Check savings anytime:
 
 ```bash
 curl -s http://127.0.0.1:8402/stats | jq .
@@ -367,14 +367,14 @@ Increase a weight to make that dimension more influential.
 
 ## 2. Where to Use It
 
-Once registered, use `iblai-router/auto` anywhere OpenClaw accepts a model ID:
+Once registered, use `openclaw-router/auto` anywhere OpenClaw accepts a model ID:
 
 | Scope | Config |
 |---|---|
-| Default for all sessions | `agents.defaults.model.primary = "iblai-router/auto"` |
-| Subagents only | `agents.defaults.subagents.model = "iblai-router/auto"` |
-| Specific cron job | `"model": "iblai-router/auto"` in the cron job config |
-| Per-session override | `/model iblai-router/auto` |
+| Default for all sessions | `agents.defaults.model.primary = "openclaw-router/auto"` |
+| Subagents only | `agents.defaults.subagents.model = "openclaw-router/auto"` |
+| Specific cron job | `"model": "openclaw-router/auto"` in the cron job config |
+| Per-session override | `/model openclaw-router/auto` |
 
 **Tip:** Keep your main interactive session on a fixed model (e.g. Opus) where latency and quality matter most. Use the router for cron jobs, subagents, and background tasks where cost savings compound.
 
@@ -385,7 +385,7 @@ Once registered, use `iblai-router/auto` anywhere OpenClaw accepts a model ID:
 ### Real-time: routing logs
 
 ```bash
-journalctl -u iblai-router -f
+journalctl -u openclaw-router -f
 ```
 
 Every request logs a line like:
@@ -503,7 +503,7 @@ passes through `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`,
 OPENROUTER_API_KEY=sk-or-... bash scripts/install.sh
 ```
 
-Or add them to `/etc/systemd/system/iblai-router.service` manually:
+Or add them to `/etc/systemd/system/openclaw-router.service` manually:
 
 ```ini
 Environment=OPENROUTER_API_KEY=sk-or-YOUR-KEY
@@ -513,7 +513,7 @@ After editing the service file, restart to pick up the new key:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart iblai-router
+sudo systemctl restart openclaw-router
 
 # Verify routing targets (shows resolved provider + model per tier)
 curl -s http://127.0.0.1:8402/health | jq .tiers
@@ -530,7 +530,7 @@ When a new version is released, update your installation in one of three ways:
 
 ### Option A: Ask your OpenClaw agent (easiest)
 
-> Update iblai-router to the latest version
+> Update openclaw-router to the latest version
 
 Your agent will pull the latest code, restart the service, and confirm the new version is running.
 
@@ -539,7 +539,7 @@ Your agent will pull the latest code, restart the service, and confirm the new v
 ```bash
 cd ~/.openclaw/workspace/router   # or wherever you cloned the repo
 git pull origin main
-sudo systemctl restart iblai-router
+sudo systemctl restart openclaw-router
 ```
 
 Verify the update:
@@ -579,7 +579,7 @@ If there's output, a newer version is available. If empty, you're up to date.
 
 ### Release notes
 
-Check [Releases](https://github.com/iblai/iblai-openclaw-router/releases) for changelogs and upgrade notes between versions.
+Check [Releases](https://github.com/xdemocle/openclaw-router/releases) for changelogs and upgrade notes between versions.
 
 ---
 
@@ -588,13 +588,13 @@ Check [Releases](https://github.com/iblai/iblai-openclaw-router/releases) for ch
 ### Temporarily (keep config, stop routing)
 
 ```bash
-sudo systemctl stop iblai-router
+sudo systemctl stop openclaw-router
 ```
 
-Any OpenClaw workloads using `iblai-router/auto` will fail until you either restart the router or switch them to a direct model. To restart later:
+Any OpenClaw workloads using `openclaw-router/auto` will fail until you either restart the router or switch them to a direct model. To restart later:
 
 ```bash
-sudo systemctl start iblai-router
+sudo systemctl start openclaw-router
 ```
 
 ### Switch specific workloads back to direct models
@@ -616,7 +616,7 @@ In your OpenClaw session:
 
 Ask your OpenClaw agent:
 
-> Uninstall iblai-router
+> Uninstall openclaw-router
 
 Or run it manually:
 
@@ -627,10 +627,10 @@ bash ~/.openclaw/workspace/router/scripts/uninstall.sh
 Then remove the provider registration in your OpenClaw session:
 
 ```
-/config unset models.providers.iblai-router
+/config unset models.providers.openclaw-router
 ```
 
-Make sure no cron jobs or agent configs still reference `iblai-router/auto` — they'll error on the next run.
+Make sure no cron jobs or agent configs still reference `openclaw-router/auto` — they'll error on the next run.
 
 ---
 
@@ -644,18 +644,18 @@ Make sure no cron jobs or agent configs still reference `iblai-router/auto` — 
 
 ## Troubleshooting
 
-### `model not allowed: iblai-router/auto`
+### `model not allowed: openclaw-router/auto`
 
 This usually means one of two things:
 
-1. **Model allowlist**: If you have `agents.defaults.models` in your `openclaw.json` (used for cache settings or other per-model config), it acts as a **model allowlist**. You must add `iblai-router/auto` to it:
+1. **Model allowlist**: If you have `agents.defaults.models` in your `openclaw.json` (used for cache settings or other per-model config), it acts as a **model allowlist**. You must add `openclaw-router/auto` to it:
 
 ```json
 {
   "agents": {
     "defaults": {
       "models": {
-        "iblai-router/auto": {},
+        "openclaw-router/auto": {},
         "anthropic/claude-opus-4-8": { ... }
       }
     }
@@ -665,7 +665,7 @@ This usually means one of two things:
 
 2. **Restart required**: OpenClaw caches available models at startup. After adding the provider to `openclaw.json`, restart OpenClaw (see Quick Start above).
 
-If you've done both and still see the error, verify the provider block is in your `openclaw.json` under `models.providers.iblai-router` with `"api": "anthropic-messages"` and at least one model with `"id": "auto"`.
+If you've done both and still see the error, verify the provider block is in your `openclaw.json` under `models.providers.openclaw-router` with `"api": "anthropic-messages"` and at least one model with `"id": "auto"`.
 
 ### Cron jobs stuck in error backoff
 
@@ -684,7 +684,7 @@ Or from the API: trigger a manual run via the cron management endpoint.
 curl -s http://127.0.0.1:8402/health
 
 # Check logs for errors (wrong API key, network issues)
-journalctl -u iblai-router -n 20
+journalctl -u openclaw-router -n 20
 
 # Verify your Anthropic API key works
 curl -s https://api.anthropic.com/v1/messages \
@@ -699,7 +699,7 @@ curl -s https://api.anthropic.com/v1/messages \
 `config.json` changes (keywords, weights, boundaries, model IDs) are hot-reloaded — no restart needed. But changes to **environment variables** (API key, port) require a service restart:
 
 ```bash
-sudo systemctl restart iblai-router
+sudo systemctl restart openclaw-router
 ```
 
 ---

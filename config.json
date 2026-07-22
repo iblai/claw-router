@@ -12,7 +12,7 @@
       "apiKeyEnv": "OPENROUTER_API_KEY",
       "auth": "bearer",
       "format": "anthropic",
-      "referer": "https://github.com/iblai/iblai-openclaw-router"
+      "referer": "https://github.com/xdemocle/openclaw-router"
     },
     "zai": {
       "baseUrl": "https://api.z.ai/api/anthropic",

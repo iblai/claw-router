@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE_NAME="iblai-router"
+SERVICE_NAME="openclaw-router"
 ROUTER_DIR="$HOME/.openclaw/workspace/skills/router"
 
-echo "Removing iblai-router..."
+echo "Removing openclaw-router..."
 
 # 1. Stop and disable service
 if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
@@ -43,8 +43,8 @@ changed = False
 
 # Remove model provider
 providers = cfg.get("models", {}).get("providers", {})
-if "iblai-router" in providers:
-    del providers["iblai-router"]
+if "openclaw-router" in providers:
+    del providers["openclaw-router"]
     # Clean up empty parents
     if not providers:
         cfg["models"].pop("providers", None)
@@ -55,16 +55,10 @@ if "iblai-router" in providers:
 
 # Remove from model allowlist
 models_allowlist = cfg.get("agents", {}).get("defaults", {}).get("models", {})
-if "iblai-router/auto" in models_allowlist:
-    del models_allowlist["iblai-router/auto"]
+if "openclaw-router/auto" in models_allowlist:
+    del models_allowlist["openclaw-router/auto"]
     changed = True
-    print("  ✓ Removed iblai-router/auto from model allowlist")
-
-# Remove legacy smart-router provider if present
-if "smart-router" in cfg.get("models", {}).get("providers", {}):
-    del cfg["models"]["providers"]["smart-router"]
-    changed = True
-    print("  ✓ Removed legacy smart-router provider")
+    print("  ✓ Removed openclaw-router/auto from model allowlist")
 
 if changed:
     with open(config_path, "w") as f:
@@ -87,7 +81,7 @@ with open(models_path) as f:
 
 changed = False
 providers = data.get("providers", {})
-for key in ["iblai-router", "smart-router"]:
+for key in ["openclaw-router"]:
     if key in providers:
         del providers[key]
         changed = True
@@ -104,7 +98,7 @@ echo ""
 echo "  ⚠ Restart OpenClaw to apply changes:"
 echo "    openclaw gateway restart"
 echo ""
-echo "  If any cron jobs or subagents used iblai-router/auto, switch them"
+echo "  If any cron jobs or subagents used openclaw-router/auto, switch them"
 echo "  to a direct model (e.g. anthropic/claude-sonnet-4-20250514)."
 echo ""
 echo "Done."

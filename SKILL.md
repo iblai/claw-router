@@ -1,9 +1,9 @@
 ---
-name: iblai-router
+name: openclaw-router
 description: Cost-optimizing model router for OpenClaw. Automatically routes each request to the cheapest capable model (LIGHT/MEDIUM/HEAVY tiers) using weighted scoring. Defaults to the latest Claude models (Haiku 4.5 / Sonnet 5 / Opus 4.8) and supports per-tier routing to other providers (OpenAI, Google, DeepSeek, z.ai, Moonshot) via Anthropic-compatible gateways. Use when setting up smart model routing, reducing API costs, or configuring multi-tier LLM routing.
 ---
 
-# iblai-router
+# openclaw-router
 
 A zero-dependency proxy that sits between OpenClaw and the Anthropic API, routing each request to the cheapest capable model using a 14-dimension weighted scorer (<1ms overhead).
 
@@ -17,10 +17,10 @@ bash "$(dirname "$0")/scripts/install.sh"
 
 This will:
 1. Copy `server.js` and `config.json` to `~/.openclaw/workspace/router/`
-2. Create and start a systemd service (`iblai-router`) on port 8402
-3. Register `iblai-router/auto` as an OpenClaw model provider
+2. Create and start a systemd service (`openclaw-router`) on port 8402
+3. Register `openclaw-router/auto` as an OpenClaw model provider
 
-After install, `iblai-router/auto` is available anywhere OpenClaw accepts a model ID.
+After install, `openclaw-router/auto` is available anywhere OpenClaw accepts a model ID.
 
 ## Verify
 
@@ -31,14 +31,14 @@ curl -s http://127.0.0.1:8402/stats | jq .
 
 ## Use
 
-Set `iblai-router/auto` as the model for any scope:
+Set `openclaw-router/auto` as the model for any scope:
 
 | Scope | How |
 |---|---|
-| Cron job | Set `model` to `iblai-router/auto` in job config |
-| Subagents | `agents.defaults.subagents.model = "iblai-router/auto"` |
-| Per-session | `/model iblai-router/auto` |
-| All sessions | `agents.defaults.model.primary = "iblai-router/auto"` |
+| Cron job | Set `model` to `openclaw-router/auto` in job config |
+| Subagents | `agents.defaults.subagents.model = "openclaw-router/auto"` |
+| Per-session | `/model openclaw-router/auto` |
+| All sessions | `agents.defaults.model.primary = "openclaw-router/auto"` |
 
 **Tip:** Keep the main interactive session on a fixed model (e.g. Opus). Use the router for cron jobs, subagents, and background tasks where cost savings compound.
 
@@ -86,7 +86,7 @@ Anthropic-compatible gateway such as OpenRouter, z.ai, or Moonshot):
 
 Set the matching `apiKeyEnv` in the systemd service (the install script passes
 through `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ZAI_API_KEY`,
-`MOONSHOT_API_KEY` if present), then `systemctl daemon-reload && systemctl restart iblai-router`.
+`MOONSHOT_API_KEY` if present), then `systemctl daemon-reload && systemctl restart openclaw-router`.
 
 ### Scoring
 
@@ -96,7 +96,7 @@ Keyword lists control which tier handles a request:
 - `imperativeVerbs`, `codeKeywords`, `agenticKeywords` → push toward **MEDIUM**
 - `technicalKeywords`, `reasoningKeywords`, `domainKeywords` → push toward **HEAVY** (capable)
 
-Tune boundaries and weights in `config.json` to match your workload. See the [full README](https://github.com/iblai/iblai-openclaw-router) for details.
+Tune boundaries and weights in `config.json` to match your workload. See the [full README](https://github.com/xdemocle/openclaw-router) for details.
 
 ## Uninstall
 
@@ -104,4 +104,4 @@ Tune boundaries and weights in `config.json` to match your workload. See the [fu
 bash "$(dirname "$0")/scripts/uninstall.sh"
 ```
 
-Stops the service, removes the systemd unit, and deletes router files. Reminder: switch any workloads using `iblai-router/auto` back to a direct model first.
+Stops the service, removes the systemd unit, and deletes router files. Reminder: switch any workloads using `openclaw-router/auto` back to a direct model first.
