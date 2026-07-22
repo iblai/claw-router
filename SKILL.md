@@ -1,26 +1,34 @@
 ---
 name: openclaw-router
-description: Cost-optimizing model router for OpenClaw. Automatically routes each request to the cheapest capable model (LIGHT/MEDIUM/HEAVY tiers) using weighted scoring. Defaults to the latest Claude models (Haiku 4.5 / Sonnet 5 / Opus 4.8) and supports per-tier routing to other providers (OpenAI, Google, DeepSeek, z.ai, Moonshot) via Anthropic-compatible gateways. Use when setting up smart model routing, reducing API costs, or configuring multi-tier LLM routing.
+description: Cost-optimizing model router for OpenClaw. Proxies OpenAI Chat Completions requests to the cheapest capable model (LIGHT/MEDIUM/HEAVY tiers) using weighted scoring. Outbound is always OpenAI Chat Completions — works with any compatible upstream (OpenAI, OpenRouter, Ollama, llama.cpp, z.ai, Moonshot). Defaults to local Ollama for LIGHT/MEDIUM and OpenAI for HEAVY. Use when setting up smart model routing, reducing API costs, or routing between local LLMs and hosted providers.
 ---
 
 # openclaw-router
 
-A zero-dependency proxy that sits between OpenClaw and the Anthropic API, routing each request to the cheapest capable model using a 14-dimension weighted scorer (<1ms overhead).
+A zero-dependency proxy that sits between OpenClaw and any OpenAI Chat Completions–compatible upstream, routing each request to the cheapest capable model using a 14-dimension weighted scorer (<1ms overhead).
 
 ## Install
-
-Run the install script to set up everything automatically:
 
 ```bash
 bash "$(dirname "$0")/scripts/install.sh"
 ```
 
 This will:
-1. Copy `server.js` and `config.json` to `~/.openclaw/workspace/router/`
+1. Copy `server.js` and `config.json` to `~/.openclaw/workspace/skills/router/`
 2. Create and start a systemd service (`openclaw-router`) on port 8402
-3. Register `openclaw-router/auto` as an OpenClaw model provider
+3. Register `openclaw-router/auto` as an OpenClaw model provider with `api: openai-chat-completions`
 
 After install, `openclaw-router/auto` is available anywhere OpenClaw accepts a model ID.
+
+## Defaults out of the box
+
+| Tier | Provider | Model | Cost |
+|---|---|---|---|
+| LIGHT | Ollama (local) | `llama3.1:8b` | free |
+| MEDIUM | Ollama (local) | `qwen2.5-coder:32b` | free |
+| HEAVY | OpenAI | `gpt-5.1` | paid |
+
+Works fully offline for LIGHT/MEDIUM once Ollama is running. HEAVY tier needs `OPENAI_API_KEY` set in the service environment.
 
 ## Verify
 
@@ -40,53 +48,49 @@ Set `openclaw-router/auto` as the model for any scope:
 | Per-session | `/model openclaw-router/auto` |
 | All sessions | `agents.defaults.model.primary = "openclaw-router/auto"` |
 
-**Tip:** Keep the main interactive session on a fixed model (e.g. Opus). Use the router for cron jobs, subagents, and background tasks where cost savings compound.
+**Tip:** Keep the main interactive session on a fixed model (e.g. Opus if you have Anthropic configured directly). Use the router for cron jobs, subagents, and background tasks where cost savings compound.
 
 ## Customize
 
-All config lives in `~/.openclaw/workspace/router/config.json` and hot-reloads on save — no restart needed.
+All config lives in `~/.openclaw/workspace/skills/router/config.json` and hot-reloads on save — no restart needed.
 
-### Models
+### Switch tiers to other upstreams
 
-Change the models per tier:
-
-```json
-{
-  "models": {
-    "LIGHT":  "claude-haiku-4-5",
-    "MEDIUM": "claude-sonnet-5",
-    "HEAVY":  "claude-opus-4-8"
-  }
-}
-```
-
-### Models from other providers (per tier)
-
-Each tier can point at a different provider. A `providers` map defines the
-upstream (`baseUrl`, `apiKeyEnv`, `auth`), and any tier can be an object
-`{ "provider": "...", "model": "..." }` instead of a bare string. Providers
-must speak the **Anthropic Messages API** format (native, or via an
-Anthropic-compatible gateway such as OpenRouter, z.ai, or Moonshot):
+Each tier can be a bare model id (uses default provider) or `{ "provider": "...", "model": "..." }`. All providers speak OpenAI Chat Completions:
 
 ```json
 {
-  "defaultProvider": "anthropic",
+  "defaultProvider": "ollama",
   "providers": {
-    "anthropic":  { "baseUrl": "https://api.anthropic.com",      "apiKeyEnv": "ANTHROPIC_API_KEY",  "auth": "x-api-key" },
-    "openrouter": { "baseUrl": "https://openrouter.ai/api/v1",   "apiKeyEnv": "OPENROUTER_API_KEY", "auth": "bearer" },
-    "zai":        { "baseUrl": "https://api.z.ai/api/anthropic", "apiKeyEnv": "ZAI_API_KEY",        "auth": "x-api-key" }
+    "ollama":    { "baseUrl": "http://127.0.0.1:11434",        "auth": "none" },
+    "llamacpp":  { "baseUrl": "http://127.0.0.1:8080",          "auth": "none" },
+    "openai":    { "baseUrl": "https://api.openai.com/v1",     "apiKeyEnv": "OPENAI_API_KEY",    "auth": "bearer" },
+    "openrouter":{ "baseUrl": "https://openrouter.ai/api/v1",  "apiKeyEnv": "OPENROUTER_API_KEY", "auth": "bearer" }
   },
   "models": {
-    "LIGHT":  { "provider": "openrouter", "model": "google/gemini-2.5-flash" },
-    "MEDIUM": { "provider": "openrouter", "model": "openai/gpt-5.1" },
-    "HEAVY":  "claude-opus-4-8"
+    "LIGHT":  { "provider": "ollama",    "model": "llama3.1:8b" },
+    "MEDIUM": { "provider": "openrouter","model": "deepseek/deepseek-v3.2" },
+    "HEAVY":  { "provider": "openai",    "model": "gpt-5.1" }
   }
 }
 ```
 
-Set the matching `apiKeyEnv` in the systemd service (the install script passes
-through `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ZAI_API_KEY`,
-`MOONSHOT_API_KEY` if present), then `systemctl daemon-reload && systemctl restart openclaw-router`.
+### Local-only mode (no cloud at all)
+
+Set all three tiers to `ollama` or `llamacpp`:
+
+```json
+{
+  "defaultProvider": "ollama",
+  "models": {
+    "LIGHT":  "llama3.1:8b",
+    "MEDIUM": "qwen2.5-coder:32b",
+    "HEAVY":  "qwen3:72b"
+  }
+}
+```
+
+All three are auth: "none" — no `OPENAI_API_KEY` required, the service won't fail if missing.
 
 ### Scoring
 
@@ -96,7 +100,22 @@ Keyword lists control which tier handles a request:
 - `imperativeVerbs`, `codeKeywords`, `agenticKeywords` → push toward **MEDIUM**
 - `technicalKeywords`, `reasoningKeywords`, `domainKeywords` → push toward **HEAVY** (capable)
 
-Tune boundaries and weights in `config.json` to match your workload. See the [full README](https://github.com/xdemocle/openclaw-router) for details.
+Tune boundaries and weights in `config.json` to match your workload.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `ROUTER_CONFIG` | `./config.json` | Path to scoring config |
+| `ROUTER_PORT` | `8402` | Port to listen on |
+| `ROUTER_LOG` | `1` | Set to `0` to disable per-request logging |
+| `OPENAI_API_KEY` | — | Required only if HEAVY/any tier uses OpenAI |
+| `OPENROUTER_API_KEY` | — | Required only if any tier uses OpenRouter |
+| `ZAI_API_KEY` / `MOONSHOT_API_KEY` | — | For z.ai / Moonshot tiers |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Override Ollama baseUrl (read at startup if you wire it) |
+| `LLAMACPP_HOST` | `http://127.0.0.1:8080` | Override llama.cpp server baseUrl |
+
+The install script passes through any of these if set in its environment.
 
 ## Uninstall
 
@@ -104,4 +123,4 @@ Tune boundaries and weights in `config.json` to match your workload. See the [fu
 bash "$(dirname "$0")/scripts/uninstall.sh"
 ```
 
-Stops the service, removes the systemd unit, and deletes router files. Reminder: switch any workloads using `openclaw-router/auto` back to a direct model first.
+Stops the service, removes the systemd unit, deletes router files. Switch any workloads using `openclaw-router/auto` back to a direct model first.

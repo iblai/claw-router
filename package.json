@@ -1,0 +1,14 @@
+{
+  "name": "openclaw-router",
+  "version": "0.2.0",
+  "description": "Cost-optimizing OpenAI Chat Completions router for OpenClaw",
+  "main": "server.js",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "smoke": "node --check server.js && bash -n scripts/install.sh && bash -n scripts/uninstall.sh"
+  }
+}

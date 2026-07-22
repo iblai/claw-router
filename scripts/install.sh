@@ -12,7 +12,6 @@ echo "⚡ Installing openclaw-router..."
 mkdir -p "$ROUTER_DIR"
 cp "$SKILL_DIR/server.js" "$ROUTER_DIR/server.js"
 
-# Only copy config if it doesn't exist (preserve user customizations)
 if [ ! -f "$ROUTER_DIR/config.json" ]; then
   cp "$SKILL_DIR/config.json" "$ROUTER_DIR/config.json"
   echo "  ✓ Copied default config.json"
@@ -21,7 +20,8 @@ else
 fi
 echo "  ✓ Copied server.js to $ROUTER_DIR"
 
-# 2. Detect Anthropic API key
+# 2. Detect OpenAI key (best-effort, for the OpenAI HEAVY tier default).
+#    Local providers (Ollama/llama.cpp) need no key. Other keys are pass-through.
 API_KEY=""
 AUTH_FILE="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
 if [ -f "$AUTH_FILE" ]; then
@@ -30,18 +30,25 @@ fi
 
 if [ -z "$API_KEY" ]; then
   echo ""
-  echo "  ⚠ Could not auto-detect Anthropic API key."
-  echo "  Edit /etc/systemd/system/$SERVICE_NAME.service and set ANTHROPIC_API_KEY manually."
-  API_KEY="sk-ant-YOUR-KEY-HERE"
+  echo "  ℹ No API key auto-detected. openclaw-router will work for local-only"
+  echo "    tiers (Ollama/llama.cpp). Set OPENAI_API_KEY in the systemd service"
+  echo "    if you want to route to cloud HEAVY tier."
+  API_KEY=""
 fi
 
-# 3. Pass through any additional provider keys set in the installer environment
-#    (for cross-provider routing — e.g. OpenRouter, z.ai, Moonshot).
+# 3. Pass through any provider keys set in the installer environment.
+#    Local endpoints (Ollama, llama.cpp) typically don't need keys, but you
+#    can override the host with OLLAMA_HOST / LLAMACPP_HOST if non-default.
 EXTRA_ENV=""
-for VAR in OPENROUTER_API_KEY OPENAI_API_KEY GOOGLE_API_KEY ZAI_API_KEY MOONSHOT_API_KEY; do
+for VAR in OPENAI_API_KEY OPENROUTER_API_KEY ZAI_API_KEY MOONSHOT_API_KEY \
+            OLLAMA_HOST LLAMACPP_HOST OLLAMA_API_KEY LLAMACPP_API_KEY; do
   if [ -n "${!VAR:-}" ]; then
     EXTRA_ENV="${EXTRA_ENV}Environment=${VAR}=${!VAR}"$'\n'
-    echo "  ✓ Passing through $VAR"
+    case "$VAR" in
+      *_HOST) echo "  ✓ Passing through $VAR (upstream host override)" ;;
+      *_API_KEY) echo "  ✓ Passing through $VAR" ;;
+      *) echo "  ✓ Passing through $VAR" ;;
+    esac
   fi
 done
 
@@ -49,13 +56,12 @@ done
 NODE_BIN=$(which node)
 sudo tee /etc/systemd/system/$SERVICE_NAME.service > /dev/null << EOF
 [Unit]
-Description=openclaw-router - Cost-optimizing model routing
+Description=openclaw-router - Cost-optimizing model routing (OpenAI Chat Completions)
 After=network.target
 
 [Service]
 Type=simple
 ExecStart=$NODE_BIN $ROUTER_DIR/server.js
-Environment=ANTHROPIC_API_KEY=$API_KEY
 ${EXTRA_ENV}Environment=ROUTER_CONFIG=$ROUTER_DIR/config.json
 Environment=ROUTER_PORT=$PORT
 Environment=ROUTER_LOG=1
@@ -90,20 +96,22 @@ config_path, port = sys.argv[1], sys.argv[2]
 with open(config_path) as f:
     cfg = json.load(f)
 
-# Add model provider
+# Add model provider.
+# Note: api is "openai-chat-completions" — OpenClaw calls it with the OpenAI
+# body shape, router picks tier + proxies. Streaming works via SSE passthrough.
 providers = cfg.setdefault("models", {}).setdefault("providers", {})
 if "openclaw-router" not in providers:
     providers["openclaw-router"] = {
         "baseUrl": f"http://127.0.0.1:{port}",
         "apiKey": "passthrough",
-        "api": "anthropic-messages",
+        "api": "openai-chat-completions",
         "models": [{
             "id": "auto",
             "name": "openclaw-router (auto)",
             "reasoning": True,
-            "input": ["text", "image"],
+            "input": ["text"],
             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
-            "contextWindow": 200000,
+            "contextWindow": 128000,
             "maxTokens": 8192
         }]
     }
@@ -131,11 +139,14 @@ else
   echo "  Now register the model in your OpenClaw session:"
   echo ""
   echo '  /config set models.providers.openclaw-router.baseUrl http://127.0.0.1:'"$PORT"
-  echo '  /config set models.providers.openclaw-router.api anthropic-messages'
+  echo '  /config set models.providers.openclaw-router.api openai-chat-completions'
   echo '  /config set models.providers.openclaw-router.apiKey passthrough'
-  echo '  /config set models.providers.openclaw-router.models [{"id":"auto","name":"openclaw-router (auto)","reasoning":true,"input":["text","image"],"contextWindow":200000,"maxTokens":8192}]'
+  echo '  /config set models.providers.openclaw-router.models [{"id":"auto","name":"openclaw-router (auto)","reasoning":true,"input":["text"],"contextWindow":128000,"maxTokens":8192}]'
 fi
 echo ""
 echo "  Then use: /model openclaw-router/auto"
+echo ""
+echo "  By default, LIGHT/MEDIUM tier route to local Ollama (127.0.0.1:11434)."
+echo "  Make sure Ollama (or your chosen provider) is running."
 echo ""
 echo "⚡ Done! Check stats: curl http://127.0.0.1:$PORT/stats"

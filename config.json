@@ -1,75 +1,94 @@
 {
-  "defaultProvider": "anthropic",
+  "defaultProvider": "ollama",
   "providers": {
-    "anthropic": {
-      "baseUrl": "https://api.anthropic.com",
-      "apiKeyEnv": "ANTHROPIC_API_KEY",
-      "auth": "x-api-key",
-      "format": "anthropic"
+    "ollama": {
+      "baseUrl": "http://127.0.0.1:11434",
+      "auth": "none",
+      "format": "openai"
+    },
+    "llamacpp": {
+      "baseUrl": "http://127.0.0.1:8080",
+      "auth": "none",
+      "format": "openai"
+    },
+    "openai": {
+      "baseUrl": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY",
+      "auth": "bearer",
+      "format": "openai"
     },
     "openrouter": {
       "baseUrl": "https://openrouter.ai/api/v1",
       "apiKeyEnv": "OPENROUTER_API_KEY",
       "auth": "bearer",
-      "format": "anthropic",
+      "format": "openai",
       "referer": "https://github.com/xdemocle/openclaw-router"
     },
     "zai": {
-      "baseUrl": "https://api.z.ai/api/anthropic",
+      "baseUrl": "https://api.z.ai/v1",
       "apiKeyEnv": "ZAI_API_KEY",
-      "auth": "x-api-key",
-      "format": "anthropic"
+      "auth": "bearer",
+      "format": "openai"
     },
     "moonshot": {
-      "baseUrl": "https://api.moonshot.ai/anthropic",
+      "baseUrl": "https://api.moonshot.ai/v1",
       "apiKeyEnv": "MOONSHOT_API_KEY",
-      "auth": "x-api-key",
-      "format": "anthropic"
+      "auth": "bearer",
+      "format": "openai"
     }
   },
   "models": {
-    "LIGHT": "claude-haiku-4-5",
-    "MEDIUM": "claude-sonnet-5",
-    "HEAVY": "claude-opus-4-8"
+    "LIGHT": {
+      "provider": "ollama",
+      "model": "llama3.1:8b"
+    },
+    "MEDIUM": {
+      "provider": "ollama",
+      "model": "qwen2.5-coder:32b"
+    },
+    "HEAVY": {
+      "provider": "openai",
+      "model": "gpt-5.1"
+    }
   },
   "costs": {
-    "claude-haiku-4-5": {
-      "input": 1.0,
-      "output": 5.0
+    "ollama/llama3.1:8b": {
+      "input": 0.0,
+      "output": 0.0
     },
-    "claude-sonnet-5": {
-      "input": 3.0,
-      "output": 15.0
+    "ollama/qwen2.5-coder:32b": {
+      "input": 0.0,
+      "output": 0.0
     },
-    "claude-opus-4-8": {
-      "input": 5.0,
-      "output": 25.0
+    "ollama/qwen3:72b": {
+      "input": 0.0,
+      "output": 0.0
     },
-    "claude-sonnet-4-6": {
-      "input": 3.0,
-      "output": 15.0
-    },
-    "claude-opus-4-6": {
-      "input": 15.0,
-      "output": 75.0
-    },
-    "openai/gpt-5.1": {
-      "input": 1.25,
-      "output": 10.0
+    "llamacpp/llama-3.1-70b": {
+      "input": 0.0,
+      "output": 0.0
     },
     "openai/gpt-5.1-mini": {
       "input": 0.25,
       "output": 2.0
     },
-    "google/gemini-3-pro": {
-      "input": 2.5,
-      "output": 15.0
+    "openai/gpt-5.1": {
+      "input": 1.25,
+      "output": 10.0
     },
-    "google/gemini-2.5-flash": {
+    "openai/o3": {
+      "input": 10.0,
+      "output": 40.0
+    },
+    "openrouter/google/gemini-2.5-flash": {
       "input": 0.3,
       "output": 2.5
     },
-    "deepseek/deepseek-v3.2": {
+    "openrouter/openai/gpt-5.1": {
+      "input": 1.25,
+      "output": 10.0
+    },
+    "openrouter/deepseek/deepseek-v3.2": {
       "input": 0.28,
       "output": 0.42
     },

@@ -1,15 +1,21 @@
 #!/usr/bin/env node
 /**
- * openclaw-router — Local cost-optimizing proxy for Anthropic Claude models.
+ * openclaw-router — Local cost-optimizing proxy for OpenAI Chat Completions API.
  *
- * Sits between OpenClaw and the Anthropic API, automatically routing each
- * request to the cheapest capable Claude model using weighted scoring.
+ * Sits between OpenClaw and any OpenAI-compatible upstream (OpenAI, OpenRouter,
+ * Ollama, llama.cpp server, z.ai, Moonshot, etc.), automatically routing each
+ * request to the cheapest capable model using weighted scoring.
+ *
+ * Proxy contract:
+ *   - Inbound:  OpenAI Chat Completions (`/v1/chat/completions`)
+ *   - Outbound: OpenAI Chat Completions (same shape; only `model` changes)
+ *   - Streaming: SSE passthrough (`data: {...}\n\n`)
  *
  * All scoring config lives in config.json (or ROUTER_CONFIG env path).
  * Zero dependencies — just Node.js standard library.
  *
  * Usage:
- *   ANTHROPIC_API_KEY=sk-ant-... node server.js
+ *   OPENAI_API_KEY=sk-... node server.js
  */
 
 const http = require("http");
@@ -25,7 +31,6 @@ function loadConfig() {
   const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
   const cfg = JSON.parse(raw);
 
-  // Compile multiStepPatterns from strings to RegExp
   if (cfg.scoring.multiStepPatterns) {
     cfg.scoring.multiStepPatterns = cfg.scoring.multiStepPatterns.map(p =>
       p instanceof RegExp ? p : new RegExp(p, "i")
@@ -33,33 +38,25 @@ function loadConfig() {
   }
 
   // ─── Providers ───
-  // Each provider = { baseUrl, apiKeyEnv, auth: "x-api-key"|"bearer", format, referer }.
-  // Backward compat: a top-level `apiBaseUrl` (legacy) synthesizes an override for
-  // the default provider so old single-provider configs keep working unchanged.
-  cfg.defaultProvider = cfg.defaultProvider || "anthropic";
+  // Each provider = { baseUrl, apiKeyEnv|apiKey, auth: "bearer"|"none", stripThinking? }
+  // Outbound is always OpenAI Chat Completions format.
+  // Upstreams that don't natively speak OpenAI (e.g. an Anthropic-native gateway
+  // someone wants to keep) can be added later behind a translator — not in scope.
+  cfg.defaultProvider = cfg.defaultProvider || "openai";
   cfg.providers = cfg.providers || {};
-  if (!cfg.providers.anthropic) {
-    cfg.providers.anthropic = {
-      baseUrl: "https://api.anthropic.com",
-      apiKeyEnv: "ANTHROPIC_API_KEY",
-      auth: "x-api-key",
-      format: "anthropic",
-    };
+  for (const [name, p] of Object.entries(cfg.providers)) {
+    p.auth = p.auth || "bearer";
+    if (!p.baseUrl) {
+      throw new Error(`Provider "${name}" missing baseUrl`);
+    }
   }
-  if (cfg.apiBaseUrl) {
-    const isOR = /openrouter/i.test(cfg.apiBaseUrl);
-    cfg.providers[cfg.defaultProvider] = {
-      ...cfg.providers[cfg.defaultProvider],
-      baseUrl: cfg.apiBaseUrl,
-      auth: isOR ? "bearer" : (cfg.providers[cfg.defaultProvider]?.auth || "x-api-key"),
-      referer: cfg.openRouterReferer || cfg.providers[cfg.defaultProvider]?.referer,
-    };
+  if (!cfg.providers[cfg.defaultProvider]) {
+    throw new Error(`Default provider "${cfg.defaultProvider}" not defined in providers map`);
   }
 
   // ─── Tiers ───
-  // Normalize each tier value (string | {provider, model, stripThinking}) into a
-  // resolved spec. A bare string uses the default provider. LIGHT strips thinking
-  // by default (Haiku-class models reject extended-thinking params).
+  // Same shape as before: a tier value is either a bare string (model id on default
+  // provider) or { provider, model, stripThinking? }.
   cfg.tiers = {};
   for (const tier of ["LIGHT", "MEDIUM", "HEAVY"]) {
     const v = cfg.models[tier];
@@ -78,7 +75,6 @@ function loadConfig() {
 
 let config = loadConfig();
 
-// Watch for config changes (hot reload)
 fs.watchFile(CONFIG_PATH, { interval: 2000 }, () => {
   try {
     config = loadConfig();
@@ -91,7 +87,6 @@ fs.watchFile(CONFIG_PATH, { interval: 2000 }, () => {
 // ─── Environment ───
 
 const PORT = parseInt(process.env.ROUTER_PORT || "8402", 10);
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const LOG_ROUTING = process.env.ROUTER_LOG !== "0";
 
 // ─── Dimension Scorers ───
@@ -144,7 +139,6 @@ function classify(text, estimatedTokens) {
     relayIndicators:  scoreKeywords(lower, s.relayKeywords, 1, 2, -0.9, -1.0),
   };
 
-  // Weighted score
   let score = 0;
   const signals = [];
   for (const [name, dim] of Object.entries(dims)) {
@@ -155,26 +149,22 @@ function classify(text, estimatedTokens) {
 
   const overrides = s.overrides || {};
 
-  // Build a decision from a tier name, attaching the resolved model + provider.
   const decide = (tier, extra) => {
     const spec = config.tiers[tier];
     return { model: spec.model, provider: spec.provider, stripThinking: spec.stripThinking, tier, score, signals, ...extra };
   };
 
-  // Override: 2+ reasoning keywords → HEAVY
   const reasoningMin = overrides.reasoningKeywordMin || 2;
   const reasoningHits = s.reasoningKeywords.filter(kw => lower.includes(kw.toLowerCase()));
   if (reasoningHits.length >= reasoningMin) {
     return decide("HEAVY", { confidence: 0.95, reasoning: "reasoning-override" });
   }
 
-  // Override: large context → HEAVY
   const largeCtx = overrides.largeContextTokens || 50000;
   if (estimatedTokens > largeCtx) {
     return decide("HEAVY", { confidence: 0.95, reasoning: "large-context" });
   }
 
-  // Map score to tier
   const { lightMedium, mediumHeavy } = s.boundaries;
   let tier, distFromBoundary;
 
@@ -189,10 +179,8 @@ function classify(text, estimatedTokens) {
     distFromBoundary = score - mediumHeavy;
   }
 
-  // Sigmoid confidence
   const confidence = 1 / (1 + Math.exp(-s.confidenceSteepness * distFromBoundary));
 
-  // Ambiguous → default MEDIUM
   if (confidence < s.confidenceThreshold) {
     return decide("MEDIUM", { confidence, reasoning: "ambiguous→medium" });
   }
@@ -200,19 +188,28 @@ function classify(text, estimatedTokens) {
   return decide(tier, { confidence, reasoning: "scored" });
 }
 
-// ─── Extract scoring text from Anthropic messages format ───
+// ─── Extract scoring text from OpenAI Chat Completions messages format ───
 
+// OpenAI shape: messages: [{role, content}] where content is string OR
+// content parts array (`[{type:"text", text:...}]`). For vision it's also
+// `{type:"image_url", image_url:{url}}` — we skip those for scoring.
+// We skip messages with role "system" (the system prompt) and the first
+// few "assistant" turns — same exclusion rule as before: only score what
+// the user is asking about right now.
 function extractText(body) {
   let text = "";
-  // Skip system prompt — it's the same for every request (OpenClaw's large
-  // system prompt) and inflates every score to HEAVY. Score only user messages.
   if (Array.isArray(body.messages)) {
     const recent = body.messages.slice(-3);
     for (const msg of recent) {
-      if (typeof msg.content === "string") text += msg.content + " ";
-      else if (Array.isArray(msg.content)) {
-        for (const block of msg.content) {
-          if (block.type === "text") text += block.text + " ";
+      if (msg.role && msg.role !== "user") continue;
+      const c = msg.content;
+      if (typeof c === "string") {
+        text += c + " ";
+      } else if (Array.isArray(c)) {
+        for (const part of c) {
+          if (part.type === "text" && typeof part.text === "string") {
+            text += part.text + " ";
+          }
         }
       }
     }
@@ -222,22 +219,24 @@ function extractText(body) {
 
 // ─── Proxy upstream ───
 
-// Resolve the API key for a provider: its configured env var first, else the
-// legacy ANTHROPIC_API_KEY so single-provider Anthropic setups keep working.
+// Resolve the API key for a provider: prefer env var if apiKeyEnv is set;
+// else fall back to literal apiKey in config (useful for local Ollama/llama.cpp
+// where there's no key). When both are missing, the request goes out without
+// Authorization — which is correct for local-only servers.
 function providerKey(provider) {
-  return (provider.apiKeyEnv && process.env[provider.apiKeyEnv]) || ANTHROPIC_API_KEY;
+  if (provider.apiKeyEnv && process.env[provider.apiKeyEnv]) {
+    return process.env[provider.apiKeyEnv];
+  }
+  return provider.apiKey || null;
 }
 
-function stripThinking(body, headers) {
-  delete body.thinking;
-  // Also strip thinking budget from anthropic-beta header
-  if (headers["anthropic-beta"]) {
-    const betas = headers["anthropic-beta"].split(",").map(s => s.trim())
-      .filter(b => !b.startsWith("thinking") && !b.startsWith("extended-thinking"));
-    if (betas.length > 0) {
-      headers["anthropic-beta"] = betas.join(",");
-    } else {
-      delete headers["anthropic-beta"];
+// stripThinking: for Ollama/llama.cpp the `reasoning_effort`-style controls are
+// rarely supported; the simplest portable behavior is to drop any `reasoning_*`
+// or `thinking` fields the caller may have set, so local upstreams don't 400.
+function stripThinking(body) {
+  for (const k of Object.keys(body)) {
+    if (k === "thinking" || k.startsWith("reasoning_")) {
+      delete body[k];
     }
   }
 }
@@ -247,9 +246,10 @@ function proxyUpstream(req, res, body, decision) {
 
   const provider = config.providers[decision.provider] || config.providers[config.defaultProvider];
 
-  // Models that don't support extended thinking (Haiku-class / LIGHT tier) —
-  // strip the thinking params OpenClaw sends so the upstream doesn't 400.
-  if (decision.stripThinking) stripThinking(body, req.headers);
+  // OpenAI Chat Completions path; append /v1/chat/completions
+  const path_ = (provider.baseUrl.replace(/\/$/, "")) + "/v1/chat/completions";
+
+  if (decision.stripThinking) stripThinking(body);
 
   const payload = JSON.stringify(body);
   const parsed = new URL(provider.baseUrl);
@@ -257,36 +257,34 @@ function proxyUpstream(req, res, body, decision) {
   const options = {
     hostname: parsed.hostname,
     port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
-    path: (parsed.pathname.replace(/\/$/, "") || "") + "/v1/messages",
+    path: path_,
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(payload),
+      // Pass through accept so streamed clients get the right content-type
+      "Accept": req.headers["accept"] || "application/json",
     },
   };
 
   const key = providerKey(provider);
-  if (provider.auth === "bearer") {
+  if (key && provider.auth !== "none") {
     options.headers["Authorization"] = `Bearer ${key}`;
-    if (provider.referer) options.headers["HTTP-Referer"] = provider.referer;
-  } else {
-    options.headers["x-api-key"] = key;
-  }
-  // Anthropic-format providers still expect the version + optional beta headers.
-  if ((provider.format || "anthropic") === "anthropic") {
-    options.headers["anthropic-version"] = req.headers["anthropic-version"] || "2023-06-01";
-    if (req.headers["anthropic-beta"]) {
-      options.headers["anthropic-beta"] = req.headers["anthropic-beta"];
-    }
   }
 
   const transport = parsed.protocol === "https:" ? https : http;
-  const upstream = transport.request(options, (upstreamRes) => {
-    res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+  const upstreamReq = transport.request(options, (upstreamRes) => {
+    // Relay status + headers (filtered to safe ones)
+    const safeHeaders = {};
+    const passthrough = ["content-type", "cache-control", "x-request-id"];
+    for (const h of passthrough) {
+      if (upstreamRes.headers[h]) safeHeaders[h] = upstreamRes.headers[h];
+    }
+    res.writeHead(upstreamRes.statusCode, safeHeaders);
     upstreamRes.pipe(res);
   });
 
-  upstream.on("error", (err) => {
+  upstreamReq.on("error", (err) => {
     console.error("[router] upstream error:", err.message);
     if (!res.headersSent) {
       res.writeHead(502, { "Content-Type": "application/json" });
@@ -294,8 +292,8 @@ function proxyUpstream(req, res, body, decision) {
     }
   });
 
-  upstream.write(payload);
-  upstream.end();
+  upstreamReq.write(payload);
+  upstreamReq.end();
 }
 
 // ─── Stats ───
@@ -326,9 +324,17 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  if (req.method !== "POST" || !req.url.startsWith("/v1/messages")) {
+  // Accept the OpenAI Chat Completions route from OpenClaw; keep /v1/messages
+  // as a legacy alias for any already-deployed clients.
+  const isChatCompletions = req.method === "POST" && (
+    req.url === "/v1/chat/completions" || req.url.startsWith("/v1/chat/completions?")
+  );
+  const isLegacyAnthropic = req.method === "POST" && (
+    req.url.startsWith("/v1/messages") || req.url.startsWith("/v1/messages?")
+  );
+  if (!isChatCompletions && !isLegacyAnthropic) {
     res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Not found. Use POST /v1/messages" }));
+    res.end(JSON.stringify({ error: "Not found. Use POST /v1/chat/completions" }));
     return;
   }
 
@@ -344,38 +350,54 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const text = extractText(body);
-    const estimatedTokens = Math.ceil(text.length / 4);
-    const decision = classify(text, estimatedTokens);
+    // Auto-rewrite inbound "auto" to whatever the scorer decides, mirroring the
+    // upstream OpenClaw provider behavior for the model id.
+    if (body.model === "auto" || body.model === "openclaw-router/auto") {
+      const text = extractText(body);
+      const estimatedTokens = Math.ceil(text.length / 4);
+      const decision = classify(text, estimatedTokens);
 
-    // Track stats
-    stats.total++;
-    stats.byTier[decision.tier] = (stats.byTier[decision.tier] || 0) + 1;
-    const cost = config.costs[decision.model] || { input: 0 };
-    stats.estimatedCost += (estimatedTokens / 1_000_000) * cost.input;
-    const opusCost = (estimatedTokens / 1_000_000) * (config.costs[config.models.HEAVY]?.input || 15);
-    stats.baselineCost += opusCost;
+      stats.total++;
+      stats.byTier[decision.tier] = (stats.byTier[decision.tier] || 0) + 1;
+      const cost = config.costs[decision.model] || { input: 0 };
+      stats.estimatedCost += (estimatedTokens / 1_000_000) * cost.input;
+      const heavyCost = (estimatedTokens / 1_000_000) * (config.costs[config.models.HEAVY]?.input || 5);
+      stats.baselineCost += heavyCost;
 
-    if (LOG_ROUTING) {
-      const savings = opusCost > 0
-        ? ((opusCost - (estimatedTokens / 1_000_000) * cost.input) / opusCost * 100).toFixed(0)
-        : 0;
-      console.log(
-        `[router] ${decision.tier.padEnd(6)} → ${decision.model} ` +
-        `| score=${decision.score.toFixed(3)} conf=${decision.confidence.toFixed(2)} ` +
-        `| ${decision.reasoning} | -${savings}% | ${text.slice(0, 80).replace(/\n/g, " ")}...`
-      );
+      if (LOG_ROUTING) {
+        const savings = heavyCost > 0
+          ? ((heavyCost - (estimatedTokens / 1_000_000) * cost.input) / heavyCost * 100).toFixed(0)
+          : 0;
+        console.log(
+          `[router] ${decision.tier.padEnd(6)} → ${decision.model} ` +
+          `| score=${decision.score.toFixed(3)} conf=${decision.confidence.toFixed(2)} ` +
+          `| ${decision.reasoning} | -${savings}% | ${text.slice(0, 80).replace(/\n/g, " ")}...`
+        );
+      }
+
+      proxyUpstream(req, res, body, decision);
+    } else {
+      // Specific model requested → just route to the default provider verbatim.
+      const decision = {
+        model: body.model,
+        provider: config.defaultProvider,
+        stripThinking: false,
+        tier: "BYPASS",
+        score: 0,
+        signals: [],
+        confidence: 1,
+        reasoning: "explicit-model",
+      };
+      proxyUpstream(req, res, body, decision);
     }
-
-    proxyUpstream(req, res, body, decision);
   });
 });
 
 // ─── Start ───
 
 const defaultProviderCfg = config.providers[config.defaultProvider];
-if (!providerKey(defaultProviderCfg)) {
-  const envName = defaultProviderCfg.apiKeyEnv || "ANTHROPIC_API_KEY";
+if (defaultProviderCfg.auth !== "none" && !providerKey(defaultProviderCfg)) {
+  const envName = defaultProviderCfg.apiKeyEnv || "API_KEY";
   console.error(`[router] No API key for default provider "${config.defaultProvider}" (set ${envName}). Exiting.`);
   process.exit(1);
 }
@@ -383,6 +405,7 @@ if (!providerKey(defaultProviderCfg)) {
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`[router] openclaw-router listening on http://127.0.0.1:${PORT}`);
   console.log(`[router] Config: ${CONFIG_PATH}`);
+  console.log(`[router] Format: OpenAI Chat Completions (outbound to all providers)`);
   const fmt = t => `${config.tiers[t].provider}/${config.tiers[t].model}`;
   console.log(`[router] Tiers: LIGHT=${fmt("LIGHT")} MEDIUM=${fmt("MEDIUM")} HEAVY=${fmt("HEAVY")}`);
 });
